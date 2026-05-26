@@ -1,6 +1,9 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <Motoron.h>
+#include <MiniMessenger.h>
+
+#include "secrets.h"
 
 // ---------------------------------------------------------------------------
 // Motor + encoder motion test
@@ -18,7 +21,7 @@
 //   3. Drive forward at 800, stop 3s
 //   4. Encoder left turn 90 degrees, stop 3s
 //   5. Encoder right turn 90 degrees, stop 3s
-//   6. Drive a U shape using encoder distance + encoder turns
+//   6. Direct in-place U-turn, 180 degrees
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -41,6 +44,16 @@ constexpr uint8_t kRightEncoderBPin = 37;
 constexpr bool kUseKillPin = true;
 constexpr uint8_t kKillPin = 32;
 
+// WiFi kill switch through MiniMessenger. Put secrets.h in the same sketch
+// folder before testing with the lab dashboard.
+constexpr bool kUseWifiKillSwitch = true;
+constexpr const char *kBoardId = "Team2Robot";       // Must match the dashboard board ID.
+constexpr bool kDefaultMotionAllowedBeforeServer = true;
+constexpr bool kScanWifiAtStartup = true;
+constexpr uint32_t kRegisterIntervalMs = 10000;
+constexpr uint32_t kWifiStatusPrintMs = 2000;
+constexpr uint32_t kSafetyWaitPrintMs = 1000;
+
 // Flip these if a motor runs backward relative to the intended command.
 constexpr int kLeftMotorSign = 1;
 constexpr int kRightMotorSign = 1;
@@ -56,10 +69,11 @@ constexpr uint32_t kStopBetweenStepsMs = 3000;
 // Encoder geometry. Measure/tune these on your actual robot.
 constexpr float kWheelDiameterMm = 39.0f;
 constexpr float kWheelTrackMm = 165.0f;          // Distance between left/right wheel contact centers.
-constexpr float kEncoderCountsPerMotorRev = 12.0f;
-constexpr float kGearRatio = 150.58f;
+constexpr float kMotorNoLoadRpm = 200.0f;        // Waveshare DCGM-N20-12V-EN-200RPM no-load speed.
+constexpr float kEncoderCountsPerMotorRev = 7.0f; // C1/A rising-edge pulses before gearbox; 1050 per wheel rev after 1:150.
+constexpr float kGearRatio = 150.0f;
 constexpr float kDistanceCalibration = 1.0f;     // Increase if robot drives too short; decrease if too far.
-constexpr float kTurnCalibration = 1.5f;         // Increase if turns are too small; decrease if too large.
+constexpr float kTurnCalibration = 1.0f;         // Increase if turns are too small; decrease if too large.
 
 // Encoder-controlled movement.
 constexpr int kDriveDistanceSpeed = 450;
@@ -72,11 +86,13 @@ constexpr uint32_t kTurnTimeoutMs = 8000;
 constexpr float kStraightCorrectionKp = 0.35f;
 constexpr int kMaxStraightCorrection = 90;
 
-// U-shape path. Path is: forward leg, turn, middle, turn, forward leg.
-constexpr float kULegDistanceMm = 300.0f;
-constexpr float kUMiddleDistanceMm = 220.0f;
+// Turning uses a hard equal-speed rule: left and right motors always receive
+// the same magnitude in opposite directions, so the robot rotates about centre.
+constexpr int kMinTurnMotorSpeed = 120;
+
+// Direct U-turn test.
+constexpr float kUTurnAngleDeg = 180.0f;
 constexpr int kUTurnDirection = 1;               // 1 = left-left U, -1 = right-right U.
-constexpr int kUDriveSpeed = 430;
 constexpr int kUTurnSpeed = 340;
 
 // true = run the full sequence once, then stop forever.
@@ -95,9 +111,19 @@ constexpr float kEncoderCountsPerWheelRev = kEncoderCountsPerMotorRev * kGearRat
 constexpr float kEncoderCountsPerMm = kEncoderCountsPerWheelRev / kWheelCircumferenceMm;
 
 MotoronI2C motoron(kMotoronAddress);
+MiniMessenger messenger;
 
 volatile long leftCount = 0;
 volatile long rightCount = 0;
+
+bool wifiKillConfigured = false;
+bool wifiSafetyEnabled = kDefaultMotionAllowedBeforeServer;
+uint32_t lastRegisterMs = 0;
+uint32_t lastWifiStatusPrintMs = 0;
+uint32_t lastSafetyWaitPrintMs = 0;
+
+void stopMotors();
+void updateWifiKillSwitch();
 
 long absLong(long value) {
   return value < 0 ? -value : value;
@@ -110,15 +136,11 @@ int clampMotorSpeed(int speed) {
 }
 
 void leftEncoderIsr() {
-  const bool a = digitalRead(kLeftEncoderAPin);
-  const bool b = digitalRead(kLeftEncoderBPin);
-  leftCount += (a == b) ? 1 : -1;
+  leftCount += (digitalRead(kLeftEncoderBPin) == LOW) ? 1 : -1;
 }
 
 void rightEncoderIsr() {
-  const bool a = digitalRead(kRightEncoderAPin);
-  const bool b = digitalRead(kRightEncoderBPin);
-  rightCount += (a == b) ? 1 : -1;
+  rightCount += (digitalRead(kRightEncoderBPin) == LOW) ? 1 : -1;
 }
 
 long getLeftCount() {
@@ -142,8 +164,146 @@ void resetEncoders() {
   interrupts();
 }
 
+void onWifiMessage(const MessageMetadata& metadata, const uint8_t* payload, size_t length) {
+  char msg[256];
+  const size_t copyLen = length < sizeof(msg) - 1 ? length : sizeof(msg) - 1;
+  memcpy(msg, payload, copyLen);
+  msg[copyLen] = '\0';
+
+  Serial.print(F("[WIFI RX] from "));
+  Serial.print(metadata.fromBoardId);
+  Serial.print(F(": "));
+  Serial.println(msg);
+
+  if (strstr(msg, "type=heartbeat enable=1")) {
+    wifiSafetyEnabled = true;
+    Serial.println(F("[WIFI SAFETY] heartbeat enable=1 -> motion allowed."));
+  } else if (strstr(msg, "type=heartbeat enable=0")) {
+    wifiSafetyEnabled = false;
+    stopMotors();
+    Serial.println(F("[WIFI SAFETY] heartbeat enable=0 -> motors stopped."));
+  }
+
+  if (strstr(msg, "type=emergency enabled=true")) {
+    wifiSafetyEnabled = false;
+    stopMotors();
+    Serial.println(F("[WIFI SAFETY] emergency enabled=true -> motors stopped."));
+  }
+
+  if (strstr(msg, "type=disable enabled=false")) {
+    wifiSafetyEnabled = false;
+    stopMotors();
+    Serial.println(F("[WIFI SAFETY] disable enabled=false -> motors stopped."));
+  }
+}
+
+const __FlashStringHelper *wifiStatusName(int status) {
+  switch (status) {
+    case WL_IDLE_STATUS: return F("WL_IDLE_STATUS");
+    case WL_NO_SSID_AVAIL: return F("WL_NO_SSID_AVAIL");
+    case WL_SCAN_COMPLETED: return F("WL_SCAN_COMPLETED");
+    case WL_CONNECTED: return F("WL_CONNECTED");
+    case WL_CONNECT_FAILED: return F("WL_CONNECT_FAILED");
+    case WL_CONNECTION_LOST: return F("WL_CONNECTION_LOST");
+    case WL_DISCONNECTED: return F("WL_DISCONNECTED");
+    default: return F("UNKNOWN");
+  }
+}
+
+void printWifiScan() {
+  Serial.println(F("[WIFI] Scanning nearby networks..."));
+  const int networkCount = WiFi.scanNetworks();
+  Serial.print(F("[WIFI] scanNetworks() found "));
+  Serial.print(networkCount);
+  Serial.println(F(" network(s)."));
+
+  for (int i = 0; i < networkCount; i++) {
+    Serial.print(F("[WIFI] SSID="));
+    Serial.print(WiFi.SSID(i));
+    Serial.print(F(" RSSI="));
+    Serial.print(WiFi.RSSI(i));
+    Serial.print(F(" dBm"));
+    if (String(WiFi.SSID(i)) == WIFI_SSID) {
+      Serial.print(F("  <-- configured SSID"));
+    }
+    Serial.println();
+  }
+}
+
+void updateWifiKillSwitch() {
+  if (!wifiKillConfigured) return;
+
+  messenger.loop();
+
+  if (messenger.isConnected() && (lastRegisterMs == 0 || millis() - lastRegisterMs >= kRegisterIntervalMs)) {
+    lastRegisterMs = millis();
+    char reg[96];
+    snprintf(reg,
+             sizeof(reg),
+             "type=register team_id=%s board_id=%s",
+             GROUP_ID,
+             kBoardId);
+    messenger.sendToBoard("server", reg);
+    Serial.print(F("[WIFI] Registered with server: "));
+    Serial.println(reg);
+  }
+
+  if (millis() - lastWifiStatusPrintMs >= kWifiStatusPrintMs) {
+    lastWifiStatusPrintMs = millis();
+    Serial.print(F("[WIFI] connected="));
+    Serial.print(messenger.isConnected() ? F("YES") : F("NO"));
+    Serial.print(F(" wifiStatus="));
+    Serial.print(WiFi.status());
+    Serial.print(F("/"));
+    Serial.print(wifiStatusName(WiFi.status()));
+    Serial.print(F(" safetyEnabled="));
+    Serial.println(wifiSafetyEnabled ? F("YES") : F("NO"));
+  }
+}
+
 bool killPressed() {
   return kUseKillPin && digitalRead(kKillPin) == LOW;
+}
+
+bool motionAllowed() {
+  updateWifiKillSwitch();
+
+  if (killPressed()) {
+    stopMotors();
+    return false;
+  }
+
+  if (kUseWifiKillSwitch && wifiKillConfigured && !wifiSafetyEnabled) {
+    stopMotors();
+    return false;
+  }
+
+  return true;
+}
+
+bool waitForMotionAllowed(const char *context) {
+  while (true) {
+    updateWifiKillSwitch();
+
+    if (killPressed()) {
+      stopMotors();
+      Serial.print(F("[SAFETY] Mechanical kill pressed while waiting for "));
+      Serial.println(context);
+      return false;
+    }
+
+    if (!kUseWifiKillSwitch || !wifiKillConfigured || wifiSafetyEnabled) {
+      return true;
+    }
+
+    stopMotors();
+    if (millis() - lastSafetyWaitPrintMs >= kSafetyWaitPrintMs) {
+      lastSafetyWaitPrintMs = millis();
+      Serial.print(F("[WIFI SAFETY] Waiting for enable=1 before "));
+      Serial.println(context);
+    }
+    delay(20);
+  }
 }
 
 void setTank(int leftSpeed, int rightSpeed) {
@@ -207,18 +367,26 @@ long turnDegreesToCounts(float degrees) {
 
 void pauseStopped(uint32_t durationMs) {
   stopMotors();
-  const uint32_t start = millis();
+  uint32_t start = millis();
   while (millis() - start < durationMs) {
-    if (killPressed()) {
+    if (!motionAllowed()) {
       stopMotors();
-      Serial.println(F("KILL pressed during pause."));
-      return;
+      if (killPressed()) {
+        Serial.println(F("KILL pressed during pause."));
+        return;
+      }
+      if (!waitForMotionAllowed("pause")) {
+        return;
+      }
+      start = millis();
     }
     delay(20);
   }
 }
 
 void runTimedForward(int speed, uint32_t durationMs) {
+  if (!waitForMotionAllowed("timed forward")) return;
+
   Serial.print(F("Timed forward speed="));
   Serial.print(speed);
   Serial.print(F(" durationMs="));
@@ -227,8 +395,8 @@ void runTimedForward(int speed, uint32_t durationMs) {
   resetEncoders();
   const uint32_t start = millis();
   while (millis() - start < durationMs) {
-    if (killPressed()) {
-      Serial.println(F("KILL pressed. Timed forward aborted."));
+    if (!motionAllowed()) {
+      Serial.println(F("Safety stop. Timed forward aborted."));
       break;
     }
     setTank(speed, speed);
@@ -240,6 +408,8 @@ void runTimedForward(int speed, uint32_t durationMs) {
 }
 
 void driveDistanceMm(float distanceMm, int speed) {
+  if (!waitForMotionAllowed("drive distance")) return;
+
   const long targetCounts = distanceMmToCounts(distanceMm);
   const int direction = distanceMm >= 0.0f ? 1 : -1;
 
@@ -253,8 +423,8 @@ void driveDistanceMm(float distanceMm, int speed) {
   resetEncoders();
   const uint32_t start = millis();
   while (true) {
-    if (killPressed()) {
-      Serial.println(F("KILL pressed. Drive distance aborted."));
+    if (!motionAllowed()) {
+      Serial.println(F("Safety stop. Drive distance aborted."));
       break;
     }
 
@@ -285,6 +455,8 @@ void driveDistanceMm(float distanceMm, int speed) {
 }
 
 void turnDegrees(float degrees, int speed) {
+  if (!waitForMotionAllowed("turn")) return;
+
   const long targetCounts = turnDegreesToCounts(degrees);
   const int direction = degrees >= 0.0f ? 1 : -1;
   const int turnDirection = direction * kTurnDirectionSign;
@@ -299,14 +471,15 @@ void turnDegrees(float degrees, int speed) {
   resetEncoders();
   const uint32_t start = millis();
   while (true) {
-    if (killPressed()) {
-      Serial.println(F("KILL pressed. Turn aborted."));
+    if (!motionAllowed()) {
+      Serial.println(F("Safety stop. Turn aborted."));
       break;
     }
 
     const long leftAbs = absLong(getLeftCount());
     const long rightAbs = absLong(getRightCount());
-    if (leftAbs >= targetCounts && rightAbs >= targetCounts) {
+    const long averageAbs = (leftAbs + rightAbs) / 2;
+    if (averageAbs >= targetCounts) {
       break;
     }
 
@@ -315,8 +488,9 @@ void turnDegrees(float degrees, int speed) {
       break;
     }
 
-    const int leftCommand = leftAbs < targetCounts ? -turnDirection * abs(speed) : 0;
-    const int rightCommand = rightAbs < targetCounts ? turnDirection * abs(speed) : 0;
+    const int turnMagnitude = constrain(abs(speed), kMinTurnMotorSpeed, 800);
+    const int leftCommand = -turnDirection * turnMagnitude;
+    const int rightCommand = turnDirection * turnMagnitude;
     setTank(leftCommand, rightCommand);
     printCounts("Turn", targetCounts);
     delay(10);
@@ -343,16 +517,8 @@ void runTurnTests() {
 }
 
 void runUShape() {
-  Serial.println(F("=== U-shape path ==="));
-  driveDistanceMm(kULegDistanceMm, kUDriveSpeed);
-  pauseStopped(kStopBetweenStepsMs);
-  turnDegrees(kUTurnDirection * 90.0f, kUTurnSpeed);
-  pauseStopped(kStopBetweenStepsMs);
-  driveDistanceMm(kUMiddleDistanceMm, kUDriveSpeed);
-  pauseStopped(kStopBetweenStepsMs);
-  turnDegrees(kUTurnDirection * 90.0f, kUTurnSpeed);
-  pauseStopped(kStopBetweenStepsMs);
-  driveDistanceMm(kULegDistanceMm, kUDriveSpeed);
+  Serial.println(F("=== Direct in-place U-turn ==="));
+  turnDegrees(kUTurnDirection * kUTurnAngleDeg, kUTurnSpeed);
   pauseStopped(kStopBetweenStepsMs);
 }
 
@@ -371,6 +537,41 @@ void initializeMotoron() {
   stopMotors();
 }
 
+void initializeWifiKillSwitch() {
+  if (!kUseWifiKillSwitch) {
+    wifiKillConfigured = false;
+    wifiSafetyEnabled = true;
+    Serial.println(F("[WIFI] WiFi kill switch disabled by parameter."));
+    return;
+  }
+
+  wifiKillConfigured = true;
+  wifiSafetyEnabled = kDefaultMotionAllowedBeforeServer;
+  lastRegisterMs = 0;
+
+  Serial.println(F("[WIFI] Starting MiniMessenger WiFi kill switch."));
+  Serial.print(F("[WIFI] Group ID = "));
+  Serial.print(GROUP_ID);
+  Serial.print(F(", Board ID = "));
+  Serial.println(kBoardId);
+  Serial.print(F("[WIFI] Default motion before server command = "));
+  Serial.println(kDefaultMotionAllowedBeforeServer ? F("ALLOWED") : F("BLOCKED"));
+  Serial.println(F("[WIFI] Robot will stop when heartbeat enable=0, disable, or emergency is received."));
+  Serial.print(F("[WIFI] SSID = "));
+  Serial.println(WIFI_SSID);
+  Serial.print(F("[WIFI] Broker = "));
+  Serial.print(BROKER_HOST);
+  Serial.print(F(":"));
+  Serial.println(BROKER_PORT);
+
+  if (kScanWifiAtStartup) {
+    printWifiScan();
+  }
+
+  messenger.onMessage(onWifiMessage);
+  messenger.begin(WIFI_SSID, WIFI_PASSWORD, BROKER_HOST, BROKER_PORT, GROUP_ID, kBoardId);
+}
+
 void setup() {
   Serial.begin(kSerialBaud);
   delay(1500);
@@ -383,14 +584,21 @@ void setup() {
   pinMode(kLeftEncoderBPin, INPUT_PULLUP);
   pinMode(kRightEncoderAPin, INPUT_PULLUP);
   pinMode(kRightEncoderBPin, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(kLeftEncoderAPin), leftEncoderIsr, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(kRightEncoderAPin), rightEncoderIsr, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(kLeftEncoderAPin), leftEncoderIsr, RISING);
+  attachInterrupt(digitalPinToInterrupt(kRightEncoderAPin), rightEncoderIsr, RISING);
 
   initializeMotoron();
+  initializeWifiKillSwitch();
 
   Serial.println(F("Motor_Encoder_U_Test ready. Lift wheels first if you are checking direction."));
   Serial.println(F("Motoron address 0x11 on Wire1. M1=left, M2=right."));
   Serial.println(F("Left encoder D34/D35, right encoder D36/D37."));
+  Serial.print(F("Motor spec: no-load rpm="));
+  Serial.print(kMotorNoLoadRpm, 1);
+  Serial.print(F(", gear ratio=1:"));
+  Serial.print(kGearRatio, 0);
+  Serial.print(F(", encoder PPR="));
+  Serial.println(kEncoderCountsPerMotorRev, 1);
   Serial.print(F("Counts per mm estimate = "));
   Serial.println(kEncoderCountsPerMm, 4);
   printMotoronState();
@@ -408,7 +616,8 @@ void loop() {
   if (kRunSequenceOnce) {
     Serial.println(F("Sequence is configured to run once. Motors stopped forever."));
     while (true) {
-      if (killPressed()) {
+      updateWifiKillSwitch();
+      if (killPressed() || (wifiKillConfigured && !wifiSafetyEnabled)) {
         stopMotors();
       }
       delay(200);

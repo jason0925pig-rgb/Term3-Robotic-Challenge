@@ -34,8 +34,9 @@ constexpr uint32_t kTurnTimeoutMs = 9000;
 
 constexpr float kWheelTrackMm = 165.0f;
 constexpr float kWheelDiameterMm = 39.0f;
-constexpr float kGearRatio = 150.58f;
-constexpr float kEncoderCountsPerMotorRev = 6.0f; // Current code counts A-channel CHANGE only.
+constexpr float kMotorNoLoadRpm = 200.0f;        // Waveshare DCGM-N20-12V-EN-200RPM no-load speed.
+constexpr float kGearRatio = 150.0f;
+constexpr float kEncoderCountsPerMotorRev = 7.0f; // Waveshare spec: 7 PPR before gearbox, 1050 PPR after 1:150.
 constexpr float kTurnCalibration = 1.5f;          // Calibrated value for accurate 90/180 degree turns.
 
 constexpr bool kRunMotionDemoOnce = true;

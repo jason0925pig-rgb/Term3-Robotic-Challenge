@@ -1,0 +1,16 @@
+**/.pio/
+**/.vscode/.browse_c_cpp.db*
+**/.vscode/c_cpp_properties.json
+**/.vscode/launch.json
+**/.vscode/ipch/
+
+# Local WiFi / broker credentials. Copy secrets.example.h to secrets.h locally.
+**/secrets.h
+
+# Build outputs
+*.bin
+*.elf
+*.hex
+*.map
+*.o
+*.obj
