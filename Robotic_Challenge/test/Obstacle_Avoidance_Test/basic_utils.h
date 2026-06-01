@@ -25,3 +25,37 @@ bool validPin(int pin) {
 bool killPressed() {
   return kUseKillPin && digitalRead(kKillPin) == LOW;
 }
+
+bool handleKillPauseInBlockingMotion() {
+  if (!killPressed()) return true;
+
+  stopMotors();
+  Serial.println(F("[KILL] paused during blocking motion. Press kill again to resume."));
+
+  while (killPressed()) {
+    handleSerialCommands();
+    if (serialStopped) return false;
+    stopMotors();
+    updateImu();
+    delay(20);
+  }
+
+  while (!killPressed()) {
+    handleSerialCommands();
+    if (serialStopped) return false;
+    stopMotors();
+    updateImu();
+    delay(20);
+  }
+
+  while (killPressed()) {
+    handleSerialCommands();
+    if (serialStopped) return false;
+    stopMotors();
+    updateImu();
+    delay(20);
+  }
+
+  Serial.println(F("[KILL] resumed blocking motion."));
+  return true;
+}

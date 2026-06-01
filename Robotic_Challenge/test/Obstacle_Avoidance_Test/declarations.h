@@ -11,6 +11,7 @@ float absFloat(float value);
 int clampMotorSpeed(int speed);
 bool validPin(int pin);
 bool killPressed();
+bool handleKillPauseInBlockingMotion();
 
 // Motoron tank-drive control.
 void setTank(int leftSpeed, int rightSpeed);
