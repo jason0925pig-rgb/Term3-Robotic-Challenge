@@ -1,231 +1,176 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <Motoron.h>
+#include <Arduino_Modulino.h>
 
 // =====================================================
-// Motoron
+// MOTORON
 // =====================================================
+MotoronI2C motoron(0x11);
 
-constexpr uint8_t kMotoronAddress = 0x11;
-constexpr uint8_t kLeftMotorChannel = 1;
-constexpr uint8_t kRightMotorChannel = 2;
-
-constexpr int kLeftMotorSign = 1;
-constexpr int kRightMotorSign = 1;
-
-MotoronI2C motoron(kMotoronAddress);
+constexpr int L_CH = 1;
+constexpr int R_CH = 2;
 
 // =====================================================
-// Kill button
+// PINS
 // =====================================================
+constexpr int TRIG_PIN = 8;
+constexpr int ECHO_PIN = 11;
 
-constexpr bool kUseKillPin = true;
-constexpr uint8_t kKillPin = 32;
-
-// =====================================================
-// Sonar Pins
-// =====================================================
-
-constexpr uint8_t kFrontTrigPin = 8;
-constexpr uint8_t kFrontEchoPin = 11;
-
-constexpr uint32_t kEchoTimeoutUs = 30000;
+constexpr int REVIVAL_PIN = 31;
+constexpr int KILL_PIN = 32;
 
 // =====================================================
-// Revival tuning
+// SPEED（只保留两档）
 // =====================================================
-
-// 远距离速度
-constexpr int kFastSpeed = 300;
-
-// 中距离速度
-constexpr int kMediumSpeed = 180;
-
-// 近距离速度
-constexpr int kSlowSpeed = 90;
-
-// 看到目标的距离
-constexpr float kDetectDistanceCm = 45.0;
-
-// 开始减速距离
-constexpr float kMediumDistanceCm = 25.0;
-
-// 非常接近距离
-constexpr float kSlowDistanceCm = 12.0;
-
-// 停止距离，防止撞飞
-constexpr float kStopDistanceCm = 7.0;
-
-// 停止后保持时间
-constexpr uint32_t kContactHoldMs = 3000;
-
-bool revivalFinished = false;
-uint32_t contactStartMs = 0;
+constexpr int BASE_SPEED = 520;
+constexpr int APPROACH_SPEED = 250;
 
 // =====================================================
-// Motor functions
+// LED
 // =====================================================
+ModulinoPixels pixels;
+bool pixelsOk = false;
 
-int clampMotor(int speed) {
-  if (speed > 800) return 800;
-  if (speed < -800) return -800;
-  return speed;
-}
+// =====================================================
+// STATE
+// =====================================================
+enum State {
+  WAITING,
+  APPROACH,
+  STOPPED,
+  KILLED
+};
 
-void setTank(int leftSpeed, int rightSpeed) {
-  leftSpeed = clampMotor(leftSpeed) * kLeftMotorSign;
-  rightSpeed = clampMotor(rightSpeed) * kRightMotorSign;
+State state = WAITING;
 
-  motoron.setSpeed(kLeftMotorChannel, leftSpeed);
-  motoron.setSpeed(kRightMotorChannel, rightSpeed);
+// =====================================================
+// MOTOR
+// =====================================================
+void setTank(int l, int r) {
+  motoron.setSpeed(L_CH, l);
+  motoron.setSpeed(R_CH, r);
 }
 
 void stopMotors() {
   setTank(0, 0);
 }
 
-void driveForward(int speed) {
-  setTank(speed, speed);
+// =====================================================
+// LED（只用红/绿，不新增任何函数）
+// =====================================================
+void setRed() {
+  if (!pixelsOk) return;
+  for (int i = 0; i < 8; i++) pixels.set(i, RED, 80);
+  pixels.show();
 }
 
-bool killPressed() {
-  return kUseKillPin && digitalRead(kKillPin) == LOW;
+void setGreen() {
+  if (!pixelsOk) return;
+  for (int i = 0; i < 8; i++) pixels.set(i, GREEN, 80);
+  pixels.show();
 }
 
 // =====================================================
-// Sonar
+// SONAR
 // =====================================================
-
-float readSonarCm(uint8_t trigPin, uint8_t echoPin) {
-  digitalWrite(trigPin, LOW);
-  delayMicroseconds(3);
-
-  digitalWrite(trigPin, HIGH);
+long readDistanceCM() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
   delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
 
-  digitalWrite(trigPin, LOW);
-
-  uint32_t durationUs = pulseIn(echoPin, HIGH, kEchoTimeoutUs);
-
-  if (durationUs == 0) {
-    return -1.0f;
-  }
-
-  return durationUs / 58.0f;
+  long t = pulseIn(ECHO_PIN, HIGH, 25000);
+  if (t == 0) return 999;
+  return t * 0.034 / 2;
 }
 
 // =====================================================
-// Init
+// SETUP
 // =====================================================
+void setup() {
+  Serial.begin(115200);
 
-void initializeMotoron() {
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  pinMode(REVIVAL_PIN, INPUT_PULLUP);
+  pinMode(KILL_PIN, INPUT_PULLUP);
+
+  Wire.begin();
+  Modulino.begin(Wire);
+
+  pixelsOk = pixels.begin();
+
   Wire1.begin();
-
   motoron.setBus(&Wire1);
   motoron.reinitialize();
-  delay(10);
-
   motoron.disableCrc();
   motoron.clearResetFlag();
 
-  motoron.setCommandTimeoutMilliseconds(1000);
-
-  motoron.setMaxAcceleration(kLeftMotorChannel, 0);
-  motoron.setMaxDeceleration(kLeftMotorChannel, 0);
-
-  motoron.setMaxAcceleration(kRightMotorChannel, 0);
-  motoron.setMaxDeceleration(kRightMotorChannel, 0);
-
   stopMotors();
+  setRed();
 
-  Serial.println(F("[INIT] Motoron ready"));
+  Serial.println("SYSTEM READY");
 }
 
 // =====================================================
-// Setup
+// LOOP
 // =====================================================
-
-void setup() {
-  Serial.begin(115200);
-  delay(1000);
-
-  if (kUseKillPin) {
-    pinMode(kKillPin, INPUT_PULLUP);
-  }
-
-  pinMode(kFrontTrigPin, OUTPUT);
-  pinMode(kFrontEchoPin, INPUT);
-
-  digitalWrite(kFrontTrigPin, LOW);
-
-  Wire.begin();
-  Wire1.begin();
-
-  initializeMotoron();
-
-  Serial.println(F("=== Robot Revival Test Ready ==="));
-}
-
-// =====================================================
-// Loop
-// =====================================================
-
 void loop() {
-  if (killPressed()) {
+
+  // =================================================
+  // 🔴 KILL（最高优先级）
+  // =================================================
+  if (digitalRead(KILL_PIN) == LOW) {
     stopMotors();
-    Serial.println(F("[KILL] pressed"));
-    delay(100);
+    setRed();
+    state = KILLED;
+  }
+
+  if (state == KILLED) {
+    stopMotors();
+    setRed();
     return;
   }
 
-  if (revivalFinished) {
+  // =================================================
+  // 🟢 REVIVAL（立即停 + 绿灯）
+  // =================================================
+  if (digitalRead(REVIVAL_PIN) == LOW) {
     stopMotors();
+    setGreen();
+    state = STOPPED;
+  }
+
+  if (state == STOPPED) {
+    stopMotors();
+    setGreen();
     return;
   }
 
-  float frontCm = readSonarCm(kFrontTrigPin, kFrontEchoPin);
+  // =================================================
+  // 🟡 SONAR（20cm开始减速）
+  // =================================================
+  long dist = readDistanceCM();
 
-  Serial.print(F("front="));
-
-  if (frontCm < 0) {
-    Serial.println(F("timeout"));
-    stopMotors();
-    delay(50);
-    return;
+  if (dist < 20) {
+    state = APPROACH;
+  } else {
+    state = WAITING;
   }
 
-  Serial.print(frontCm);
-  Serial.println(F(" cm"));
+  // =================================================
+  // 🚗 SPEED CONTROL（仅两档）
+  // =================================================
+  int speed;
 
-  if (frontCm > kDetectDistanceCm) {
-    stopMotors();
-    Serial.println(F("[REVIVAL] No target detected"));
-  }
-  else if (frontCm > kMediumDistanceCm) {
-    driveForward(kFastSpeed);
-    Serial.println(F("[REVIVAL] Fast approach"));
-  }
-  else if (frontCm > kSlowDistanceCm) {
-    driveForward(kMediumSpeed);
-    Serial.println(F("[REVIVAL] Medium approach"));
-  }
-  else if (frontCm > kStopDistanceCm) {
-    driveForward(kSlowSpeed);
-    Serial.println(F("[REVIVAL] Slow contact approach"));
-  }
-  else {
-    stopMotors();
-
-    if (contactStartMs == 0) {
-      contactStartMs = millis();
-      Serial.println(F("[REVIVAL] Contact reached. Holding."));
-    }
-
-    if (millis() - contactStartMs >= kContactHoldMs) {
-      revivalFinished = true;
-      Serial.println(F("[REVIVAL] Finished."));
-    }
+  if (state == APPROACH) {
+    speed = APPROACH_SPEED;
+  } else {
+    speed = BASE_SPEED;
   }
 
-  delay(50);
+  setTank(speed, speed);
 }
