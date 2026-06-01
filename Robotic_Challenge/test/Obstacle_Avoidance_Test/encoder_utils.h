@@ -56,7 +56,7 @@ bool driveDistanceMm(float distanceMm, int speed) {
 
   while (true) {
     handleSerialCommands();
-    if (serialStopped || killPressed()) {
+    if (serialStopped || !handleKillPauseInBlockingMotion()) {
       stopMotors();
       return false;
     }
