@@ -119,7 +119,7 @@ void encoderOnlyTurnFallback(float degrees, int speed) {
   const uint32_t start = millis();
   while (true) {
     handleSerialCommands();
-    if (serialStopped || killPressed()) break;
+    if (serialStopped || !handleKillPauseInBlockingMotion()) break;
 
     const long averageAbs = (absLong(getLeftCount()) + absLong(getRightCount())) / 2;
     if (averageAbs >= targetCounts) break;
@@ -155,7 +155,7 @@ bool turnDegreesImu(float targetDeg) {
 
   while (true) {
     handleSerialCommands();
-    if (serialStopped || killPressed()) {
+    if (serialStopped || !handleKillPauseInBlockingMotion()) {
       stopMotors();
       return false;
     }
