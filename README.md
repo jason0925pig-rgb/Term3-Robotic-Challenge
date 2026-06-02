@@ -2,6 +2,13 @@
 
 ## Project Overview
 
+## Test Evidence and Software Overview
+
+- **Test evidence folder**: [Google Drive - Robotics Challenge Test Evidence](https://drive.google.com/drive/folders/1lylcU1_YlyFc5X74qTHDK-R3Fs9V-x57?usp=sharing)
+- **Software overview diagram**: [SVG version](docs/software_overview_diagram.svg) / [PNG version](docs/software_overview_diagram.png)
+
+![Software Overview Diagram](docs/software_overview_diagram.svg)
+
 ### Competition Theme
 "UCL RAI Terraforming Initiative" — 14 autonomous robots are sent to another planet to prepare it for human habitation. Robots must explore the surface, plant seeds at fertile locations, respond to emergency warnings, and rescue stranded teammates.
 
