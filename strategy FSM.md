@@ -15,6 +15,7 @@ stateDiagram-v2
     state "Go to base door" as GoBaseDoor
     state "Request base door" as RequestDoor
     state "Wait for door reply" as WaitDoor
+    state "Report brightest LDR area" as ReportBrightest
     state "Enter base" as EnterBase
     state "Mission complete" as Done
 
@@ -32,7 +33,8 @@ stateDiagram-v2
 
     GoBaseDoor --> RequestDoor: arrive at base entrance
     RequestDoor --> WaitDoor: sendOpenDoorRequest()
-    WaitDoor --> EnterBase: server confirms door open
+    WaitDoor --> ReportBrightest: server confirms door open
+    ReportBrightest --> EnterBase: send brightest LDR reading / grid point
     EnterBase --> Done
     Done --> [*]
 
@@ -148,6 +150,7 @@ stateDiagram-v2
     state "Turn left" as TurnLeft
     state "Request base door" as RequestDoor
     state "Wait for server response" as WaitDoor
+    state "Report brightest LDR area" as ReportBrightest
     state "Enter base" as EnterBase
     state "Mission complete" as Done
 
@@ -164,7 +167,8 @@ stateDiagram-v2
     TurnLeft --> WallFollow: turnLeft()
 
     RequestDoor --> WaitDoor: sendOpenDoorRequest()
-    WaitDoor --> EnterBase: server confirms door open
+    WaitDoor --> ReportBrightest: server confirms door open
+    ReportBrightest --> EnterBase: send brightest LDR reading / grid point
     EnterBase --> Done
     Done --> [*]
 ```
