@@ -1024,22 +1024,28 @@ bool driveDistanceMm(float distanceMm, int speed) {
 }
 
 bool plantAtUid(const String &uid) {
-  if (seedsPlanted >= kMaxSeedsToPlant) {
-    Serial.println(F("[PLANT] already planted five seeds; route continues without planting."));
+  Serial.println(F("[PLANT] Drive 7.5 cm to center hole before server query."));
+  if (!driveDistanceMm(kPlantCenterOffsetMm, kPlantOffsetSpeed)) {
     return false;
   }
+  stopMotors();
+  Serial.println(F("[PLANT] centered over hole. Waiting for server reply."));
 
   CellStatus status = {};
   const bool gotReply = queryServerForCellStatus(uid, &status);
   const bool eligible = gotReply ? (status.fertile && !status.planted) : kPlantIfNoServerReply;
 
   if (!eligible) {
-    Serial.println(F("[PLANT] not eligible; continue route."));
+    Serial.println(F("[PLANT] not eligible or no server reply; continue route without planting."));
     return false;
   }
 
-  Serial.println(F("[PLANT] eligible. Drive 7.5 cm to center hole."));
-  if (!driveDistanceMm(kPlantCenterOffsetMm, kPlantOffsetSpeed)) return false;
+  if (seedsPlanted >= kMaxSeedsToPlant) {
+    Serial.println(F("[PLANT] already planted five seeds; route continues without planting."));
+    return false;
+  }
+
+  Serial.println(F("[PLANT] eligible. Dropping one seed."));
   dropOneSeed();
   seedsPlanted++;
   notifySeedPlanted(uid);
@@ -1069,6 +1075,7 @@ void handleRfidEvent(const String &uid) {
   Serial.println(kRoute[routeIndex].rfidCount);
 
   plantAtUid(uid);
+  lastUidMs = millis();
 }
 
 void runRouteStep() {

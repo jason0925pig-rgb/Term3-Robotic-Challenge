@@ -33,10 +33,12 @@
 //   3. Read the base-exit RFID tag and request airlock A.
 //   4. Keep following the line until it disappears at the tunnel entry.
 //   5. Start tunnel wall following using the initial IMU calibration.
-//   6. Follow the tunnel wall until the front sonar sees the far door.
-//   7. Wait until the far door opens.
-//   8. Cancel wall following, drive forward until the first RFID tag is read,
-//      then drive a tunable alignment offset to place the robot over that spot.
+//   6. As soon as the QTR array sees the grid line again, abandon wall
+//      following and follow the line to the first grid RFID.
+//   7. At every grid RFID: drive 75 mm to center the hole, stop, query the
+//      server, plant only if fertile=true and planted=false, then continue.
+//   8. After the first grid RFID turn right, then execute the fixed RFID-count
+//      route: 2L,3L,1L,2R,1R,2L,1L,3R,1R,3L,1L,3R,1L+openAirlock.
 //
 // Hardware:
 //   QTR CTRL odd/even -> D2/D3
@@ -100,6 +102,30 @@ constexpr int kTunnelEntryConfirmSpeed = 260;  // Straight speed used while conf
 // Forward motion after tunnel exit while searching for the first RFID tag.
 constexpr int kPostTunnelSearchSpeed = 300;  // Forward speed after exit door while searching for first RFID.
 constexpr int kRfidAlignSpeed = 260;  // Encoder-drive speed for final RFID alignment offset.
+
+// After the tunnel, the robot returns to fixed RFID-count navigation. Every
+// RFID node is handled in this order: read tag, drive 75 mm to put the robot
+// center over the hole, stop and wait for the server, then plant only if the
+// server reports fertile=true and planted=false.
+constexpr uint8_t kWallExitLineStableFrames = 2;  // Consecutive line frames needed to leave wall following.
+constexpr float kGridPlantCenterOffsetMm = 75.0f;  // Drive after each grid RFID before querying/planting.
+constexpr int kGridPlantOffsetSpeed = 360;  // Encoder-drive speed for the 75 mm RFID-to-hole offset.
+constexpr bool kPlantIfNoServerReply = false;  // true only for offline bench tests.
+constexpr uint8_t kMaxSeedsToPlant = 5;  // Keep following the route after this, but do not drop more seeds.
+constexpr uint32_t kServerReplyTimeoutMs = 900;  // Time to wait for isFertileReply at each RFID node.
+constexpr uint32_t kGridRfidCooldownMs = 1300;  // Ignore the same UID briefly after it was handled.
+
+// DS-R005 300 degree positional servo used for seed release.
+constexpr uint8_t kServoPin = 33;  // Servo signal pin.
+constexpr int kServoMinUs = 500;  // Pulse width for 0 degrees.
+constexpr int kServoMaxUs = 2500;  // Pulse width for 300 degrees.
+constexpr int kServoMinAngle = 0;  // Servo reset angle.
+constexpr int kServoMaxAngle = 300;  // Servo maximum angle.
+constexpr int kServoStepAngle = 60;  // Seed-release step.
+constexpr uint32_t kServoMoveSettleMs = 600;  // Time to send the new target angle.
+constexpr uint32_t kServoHoldAfterDropMs = 1200;  // Hold time after a seed-release step.
+constexpr uint32_t kServoFrameUs = 20000;  // 50 Hz servo frame.
+constexpr bool kResetServoAtStartup = true;  // Reset servo to 0 degrees when sensors initialize.
 
 // Line-following control copied from the existing line tests, slowed slightly
 // for reliable route events.
@@ -254,6 +280,10 @@ enum class MissionState {
   WaitExitDoorOpen,
   SearchFirstRfid,
   AlignOverRfid,
+  FollowLineToFirstGridRfid,
+  EasyGridRoute,
+  EasyDoorRequest,
+  EasyAfterDoorForward,
   Done,
   Stopped
 };
@@ -271,6 +301,31 @@ enum class TurnDir {
   Left,
   Right
 };
+
+struct EasyRouteStep {
+  uint8_t rfidCount;
+  TurnDir turnAfter;
+  bool requestDoorAfterTurn;
+};
+
+// This route starts after the first grid RFID has already been handled and
+// the robot has made the initial right turn.
+constexpr EasyRouteStep kEasyRoute[] = {
+    {2, TurnDir::Left, false},
+    {3, TurnDir::Left, false},
+    {1, TurnDir::Left, false},
+    {2, TurnDir::Right, false},
+    {1, TurnDir::Right, false},
+    {2, TurnDir::Left, false},
+    {1, TurnDir::Left, false},
+    {3, TurnDir::Right, false},
+    {1, TurnDir::Right, false},
+    {3, TurnDir::Left, false},
+    {1, TurnDir::Left, false},
+    {3, TurnDir::Right, false},
+    {1, TurnDir::Left, true},
+};
+constexpr uint8_t kEasyRouteLength = sizeof(kEasyRoute) / sizeof(kEasyRoute[0]);
 
 struct MotorCommand {
   int left = 0;
@@ -292,6 +347,12 @@ struct DoorReading {
   bool valid = false;
   bool closed = false;
   bool open = false;
+};
+
+struct CellStatus {
+  bool valid = false;
+  bool fertile = false;
+  bool planted = false;
 };
 
 MotoronI2C motoron(kMotoronAddress);
@@ -347,8 +408,18 @@ uint8_t routeTurnIndex = 0;
 uint8_t eventStableCount = 0;
 uint8_t doorClosedStableCount = 0;
 uint8_t doorOpenStableCount = 0;
+uint8_t wallExitLineStableCount = 0;
+uint8_t easyRouteIndex = 0;
+uint8_t easySegmentRfidCount = 0;
+uint8_t seedsPlanted = 0;
+int currentServoAngle = kServoMinAngle;
 
 String lastUid;
+String lastGridUid;
+uint32_t lastGridUidMs = 0;
+bool easyDoorRequestSent = false;
+bool waitingForCellStatus = false;
+CellStatus lastCellStatus;
 
 int lastLineError = 0;
 int lastSeenLineError = 0;
@@ -496,6 +567,10 @@ const __FlashStringHelper *stateName(MissionState state) {
     case MissionState::WaitExitDoorOpen: return F("WAIT_EXIT_DOOR_OPEN");
     case MissionState::SearchFirstRfid: return F("SEARCH_FIRST_RFID");
     case MissionState::AlignOverRfid: return F("ALIGN_OVER_RFID");
+    case MissionState::FollowLineToFirstGridRfid: return F("FOLLOW_LINE_TO_FIRST_GRID_RFID");
+    case MissionState::EasyGridRoute: return F("EASY_GRID_ROUTE");
+    case MissionState::EasyDoorRequest: return F("EASY_DOOR_REQUEST");
+    case MissionState::EasyAfterDoorForward: return F("EASY_AFTER_DOOR_FORWARD");
     case MissionState::Done: return F("DONE");
     case MissionState::Stopped: return F("STOPPED");
     default: return F("UNKNOWN");
@@ -724,8 +799,84 @@ void setState(MissionState newState) {
   if (newState == MissionState::FollowLineToTunnelEntry) {
     tunnelEntryNoLineCount = 0;
   }
+  if (newState == MissionState::WallFollowTunnel) {
+    wallExitLineStableCount = 0;
+  }
+  if (newState == MissionState::FollowLineToFirstGridRfid ||
+      newState == MissionState::EasyGridRoute ||
+      newState == MissionState::EasyAfterDoorForward) {
+    resetLineController();
+  }
   Serial.print(F("[STATE] "));
   Serial.println(stateName(newState));
+}
+
+/**
+ * Convert a 0-300 degree servo target to a 50 Hz pulse width.
+ *
+ * @param angle Servo angle in degrees.
+ * @return Pulse width in microseconds.
+ */
+int angleToPulseUs(int angle) {
+  angle = constrain(angle, kServoMinAngle, kServoMaxAngle);
+  return map(angle, kServoMinAngle, kServoMaxAngle, kServoMinUs, kServoMaxUs);
+}
+
+/**
+ * Send one blocking servo PWM frame.
+ *
+ * @param pulseUs High pulse width in microseconds.
+ */
+void sendServoPulse(int pulseUs) {
+  digitalWrite(kServoPin, HIGH);
+  delayMicroseconds(pulseUs);
+  digitalWrite(kServoPin, LOW);
+  delayMicroseconds(kServoFrameUs - pulseUs);
+}
+
+/**
+ * Hold a servo angle by repeatedly sending PWM frames.
+ *
+ * @param angle Servo angle in degrees.
+ * @param durationMs Duration to keep sending the command.
+ */
+void holdServoAngle(int angle, uint32_t durationMs) {
+  const int pulseUs = angleToPulseUs(angle);
+  const uint32_t start = millis();
+  while (millis() - start < durationMs) {
+    sendServoPulse(pulseUs);
+  }
+}
+
+/**
+ * Move the seed-release servo to an absolute angle.
+ *
+ * @param angle Target servo angle.
+ */
+void moveServoToAngle(int angle) {
+  currentServoAngle = constrain(angle, kServoMinAngle, kServoMaxAngle);
+  Serial.print(F("[SERVO] angle="));
+  Serial.print(currentServoAngle);
+  Serial.print(F(" pulseUs="));
+  Serial.println(angleToPulseUs(currentServoAngle));
+  holdServoAngle(currentServoAngle, kServoMoveSettleMs);
+}
+
+/**
+ * Drop one seed by stepping the 300 degree servo by 60 degrees.
+ */
+void dropOneSeed() {
+  int nextAngle = currentServoAngle + kServoStepAngle;
+  if (nextAngle > kServoMaxAngle) {
+    Serial.println(F("[SERVO] 300deg reached; reset to 0 before next drop."));
+    moveServoToAngle(kServoMinAngle);
+    holdServoAngle(kServoMinAngle, 400);
+    nextAngle = kServoStepAngle;
+  }
+
+  Serial.println(F("[PLANT] drop one seed."));
+  moveServoToAngle(nextAngle);
+  holdServoAngle(currentServoAngle, kServoHoldAfterDropMs);
 }
 
 // ---------------------------------------------------------------------------
@@ -919,9 +1070,18 @@ void restartMission() {
   routeTurnIndex = 0;
   eventStableCount = 0;
   tunnelEntryNoLineCount = 0;
+  wallExitLineStableCount = 0;
+  easyRouteIndex = 0;
+  easySegmentRfidCount = 0;
+  seedsPlanted = 0;
+  easyDoorRequestSent = false;
+  waitingForCellStatus = false;
+  lastCellStatus = {};
   postTurnHardIgnoreActive = false;
   postTurnHardReleaseCount = 0;
   lastUid = "";
+  lastGridUid = "";
+  lastGridUidMs = 0;
   lastEventMs = millis();
   resetLineController();
   resetWallController();
@@ -1884,6 +2044,20 @@ void allowWifiSafety() {
 }
 
 /**
+ * Parse a server fertility/status reply for the latest RFID query.
+ *
+ * @param msg Null-terminated MiniMessenger payload.
+ */
+void parseCellStatusReply(const char *msg) {
+  if (!strstr(msg, "type=isFertileReply")) return;
+
+  lastCellStatus.valid = true;
+  lastCellStatus.fertile = strstr(msg, "fertile=true") != nullptr;
+  lastCellStatus.planted = strstr(msg, "planted=true") != nullptr;
+  waitingForCellStatus = false;
+}
+
+/**
  * Handle server messages from MiniMessenger.
  *
  * The official MiniMessenger protocol uses text key=value messages for normal
@@ -1911,6 +2085,8 @@ void onWifiMessage(const MessageMetadata& metadata, const uint8_t* payload, size
 
   Serial.print(F("[WIFI RX] "));
   Serial.println(msg);
+
+  parseCellStatusReply(msg);
 
   if (strstr(msg, "enable=1") || strstr(msg, "type=enable")) {
     allowWifiSafety();
@@ -2050,6 +2226,103 @@ bool sendAirlockOpenRequest(const String &uid) {
   Serial.println(ok ? F("YES") : F("NO"));
   return ok;
 }
+
+/**
+ * @return true when MiniMessenger is connected to the server.
+ */
+bool serverOnline() {
+  return messenger.isConnected();
+}
+
+/**
+ * Ask the server whether an RFID cell is fertile and unplanted.
+ *
+ * @param uid RFID tag UID.
+ * @param statusOut Filled with the reply when one is received.
+ * @return true when an isFertileReply was received before timeout.
+ */
+bool queryServerForCellStatus(const String &uid, CellStatus *statusOut) {
+  statusOut->valid = false;
+  statusOut->fertile = false;
+  statusOut->planted = false;
+
+  if (!serverOnline()) {
+    Serial.print(F("[SERVER] offline; cannot query tag_id="));
+    Serial.println(uid);
+    return false;
+  }
+
+  char msg[140];
+  snprintf(
+      msg,
+      sizeof(msg),
+      "type=isFertile team_id=%s board_id=%s tag_id=%s",
+      GROUP_ID,
+      kBoardId,
+      uid.c_str());
+
+  lastCellStatus = {};
+  waitingForCellStatus = true;
+  const bool sent = messenger.sendToBoard("server", msg);
+  Serial.print(F("[SERVER] sent "));
+  Serial.print(msg);
+  Serial.print(F(" ok="));
+  Serial.println(sent ? F("YES") : F("NO"));
+
+  if (!sent) {
+    waitingForCellStatus = false;
+    return false;
+  }
+
+  const uint32_t start = millis();
+  while (millis() - start < kServerReplyTimeoutMs) {
+    handleSerialCommands();
+    updateWifi();
+    if (serialStopped || handleStartStopButtonEvent()) {
+      stopMotors();
+      waitingForCellStatus = false;
+      return false;
+    }
+
+    if (!waitingForCellStatus && lastCellStatus.valid) {
+      *statusOut = lastCellStatus;
+      Serial.print(F("[SERVER] reply fertile="));
+      Serial.print(statusOut->fertile ? F("true") : F("false"));
+      Serial.print(F(" planted="));
+      Serial.println(statusOut->planted ? F("true") : F("false"));
+      return true;
+    }
+
+    updateImu();
+    delay(10);
+  }
+
+  waitingForCellStatus = false;
+  Serial.println(F("[SERVER] isFertile reply timeout."));
+  return false;
+}
+
+/**
+ * Tell the server that this robot has planted a seed at the current RFID tag.
+ *
+ * @param uid RFID tag UID.
+ */
+void notifySeedPlanted(const String &uid) {
+  char msg[140];
+  snprintf(
+      msg,
+      sizeof(msg),
+      "type=seedPlanted team_id=%s board_id=%s tag_id=%s",
+      GROUP_ID,
+      kBoardId,
+      uid.c_str());
+
+  Serial.print(F("[SERVER] seedPlanted "));
+  Serial.println(msg);
+  if (serverOnline()) {
+    messenger.sendToBoard("server", msg);
+  }
+}
 #else
 /**
  * No-op WiFi initializer when secrets.h is not present.
@@ -2089,6 +2362,39 @@ bool sendAirlockOpenRequest(const String &uid) {
   Serial.print(uid);
   Serial.println(F(" board_id=<kBoardId>. Copy secrets.example.h to secrets.h to enable."));
   return false;
+}
+
+/**
+ * @return false when MiniMessenger is disabled.
+ */
+bool serverOnline() {
+  return false;
+}
+
+/**
+ * Offline fallback for cell status queries.
+ *
+ * @param uid RFID tag UID.
+ * @param statusOut Filled with invalid/false values.
+ * @return false because no server reply can be received.
+ */
+bool queryServerForCellStatus(const String &uid, CellStatus *statusOut) {
+  statusOut->valid = false;
+  statusOut->fertile = false;
+  statusOut->planted = false;
+  Serial.print(F("[SERVER] WiFi disabled. Would query isFertile tag_id="));
+  Serial.println(uid);
+  return false;
+}
+
+/**
+ * Offline fallback for seedPlanted.
+ *
+ * @param uid RFID tag UID.
+ */
+void notifySeedPlanted(const String &uid) {
+  Serial.print(F("[SERVER] WiFi disabled. Would send seedPlanted tag_id="));
+  Serial.println(uid);
 }
 #endif
 
@@ -2500,6 +2806,226 @@ bool driveForwardUntilFirstRfid() {
 }
 
 // ---------------------------------------------------------------------------
+// Post-tunnel fixed grid route
+// ---------------------------------------------------------------------------
+
+/**
+ * @return true if this UID was already handled recently.
+ */
+bool isDuplicateRecentGridUid(const String &uid) {
+  return uid == lastGridUid && millis() - lastGridUidMs < kGridRfidCooldownMs;
+}
+
+/**
+ * Drive from the RFID reader position to the hole-center position, then query
+ * the server and plant if the cell is fertile and unplanted.
+ *
+ * @param uid RFID tag UID.
+ * @return true when the UID was handled; false if it was a duplicate or stop.
+ */
+bool handleGridRfidNode(const String &uid) {
+  if (isDuplicateRecentGridUid(uid)) {
+    return false;
+  }
+
+  lastUid = uid;
+  lastGridUid = uid;
+  lastGridUidMs = millis();
+
+  stopMotors();
+  Serial.print(F("[GRID RFID] uid="));
+  Serial.println(uid);
+  Serial.println(F("[GRID RFID] driving 75 mm to hole center before server query."));
+
+  if (!driveDistanceMm(kGridPlantCenterOffsetMm, kGridPlantOffsetSpeed)) {
+    stopMotors();
+    return false;
+  }
+
+  stopMotors();
+  Serial.println(F("[GRID RFID] centered over hole; waiting for isFertileReply."));
+
+  CellStatus status = {};
+  const bool gotReply = queryServerForCellStatus(uid, &status);
+  const bool eligible = gotReply ? (status.fertile && !status.planted) : kPlantIfNoServerReply;
+
+  if (!eligible) {
+    Serial.println(F("[PLANT] not eligible or no server reply; no seed dropped."));
+    lastGridUidMs = millis();
+    return true;
+  }
+
+  if (seedsPlanted >= kMaxSeedsToPlant) {
+    Serial.println(F("[PLANT] seed limit reached; route continues without dropping."));
+    lastGridUidMs = millis();
+    return true;
+  }
+
+  dropOneSeed();
+  seedsPlanted++;
+  notifySeedPlanted(uid);
+  Serial.print(F("[PLANT] seedsPlanted="));
+  Serial.print(seedsPlanted);
+  Serial.print(F("/"));
+  Serial.println(kMaxSeedsToPlant);
+  lastGridUidMs = millis();
+  return true;
+}
+
+/**
+ * Perform one easy-route turn and reset line controller afterwards.
+ *
+ * @param dir Turn direction.
+ * @return true if the turn completed.
+ */
+bool performEasyTurn(TurnDir dir) {
+  Serial.print(F("[EASY ROUTE] turn "));
+  Serial.println(turnName(dir));
+  stopMotors();
+  delay(120);
+  const bool ok = turnDegreesImu(degreesForTurn(dir));
+  delay(120);
+  resetLineController();
+  return ok;
+}
+
+/**
+ * Follow the rediscovered line after the tunnel until the first grid RFID.
+ *
+ * The first grid RFID is handled as a planting candidate, then the robot turns
+ * right and starts the fixed route from "2 RFIDs, left".
+ */
+void updateFollowLineToFirstGridRfid() {
+  String uid;
+  if (pollRfid(&uid, true)) {
+    if (handleGridRfidNode(uid)) {
+      if (!performEasyTurn(TurnDir::Right)) {
+        serialStopped = true;
+        setState(MissionState::Stopped);
+        return;
+      }
+      easyRouteIndex = 0;
+      easySegmentRfidCount = 0;
+      setState(MissionState::EasyGridRoute);
+      return;
+    }
+  }
+
+  const LineReading line = readLine();
+  if (!line.detected) {
+    setTank(kTunnelEntryConfirmSpeed, kTunnelEntryConfirmSpeed);
+    updateImu();
+    delay(kLineLoopDelayMs);
+    return;
+  }
+
+  applyLineCommand(line, F("[GRID FIRST]"));
+  delay(kLineLoopDelayMs);
+}
+
+/**
+ * Follow the hard-coded RFID-count route after the tunnel.
+ */
+void updateEasyGridRoute() {
+  if (easyRouteIndex >= kEasyRouteLength) {
+    setState(MissionState::EasyAfterDoorForward);
+    return;
+  }
+
+  String uid;
+  if (pollRfid(&uid, true)) {
+    if (handleGridRfidNode(uid)) {
+      easySegmentRfidCount++;
+      const EasyRouteStep step = kEasyRoute[easyRouteIndex];
+
+      Serial.print(F("[EASY ROUTE] step="));
+      Serial.print(easyRouteIndex + 1);
+      Serial.print(F("/"));
+      Serial.print(kEasyRouteLength);
+      Serial.print(F(" count="));
+      Serial.print(easySegmentRfidCount);
+      Serial.print(F("/"));
+      Serial.println(step.rfidCount);
+
+      if (easySegmentRfidCount >= step.rfidCount) {
+        easySegmentRfidCount = 0;
+        if (!performEasyTurn(step.turnAfter)) {
+          serialStopped = true;
+          setState(MissionState::Stopped);
+          return;
+        }
+
+        easyRouteIndex++;
+        if (step.requestDoorAfterTurn) {
+          Serial.println(F("[EASY ROUTE] final turn complete; requesting airlock with last RFID UID."));
+          setState(MissionState::EasyDoorRequest);
+          return;
+        }
+      }
+    }
+  }
+
+  const LineReading line = readLine();
+  if (!line.detected) {
+    setTank(kTunnelEntryConfirmSpeed, kTunnelEntryConfirmSpeed);
+    updateImu();
+    delay(kLineLoopDelayMs);
+    return;
+  }
+
+  applyLineCommand(line, F("[EASY ROUTE]"));
+  delay(kLineLoopDelayMs);
+}
+
+/**
+ * Send the final openAirlock request after the fixed route.
+ */
+void updateEasyDoorRequest() {
+  stopMotors();
+  const String uid = lastGridUid.length() > 0 ? lastGridUid : lastUid;
+  if (uid.length() == 0) {
+    Serial.println(F("[AIRLOCK] no RFID UID available for final door request."));
+    setState(MissionState::EasyAfterDoorForward);
+    return;
+  }
+
+  if (!easyDoorRequestSent) {
+    easyDoorRequestSent = sendAirlockOpenRequest(uid);
+  }
+
+  if (easyDoorRequestSent) {
+    Serial.println(F("[AIRLOCK] final request sent; continuing forward."));
+    setState(MissionState::EasyAfterDoorForward);
+    return;
+  }
+
+  Serial.println(F("[AIRLOCK] final request not sent yet; retrying."));
+  delay(kAirlockRequestRetryMs);
+}
+
+/**
+ * Continue forward after the final door request. RFID nodes are still queried
+ * and planted if eligible, but no more scripted turns are performed.
+ */
+void updateEasyAfterDoorForward() {
+  String uid;
+  if (pollRfid(&uid, true)) {
+    handleGridRfidNode(uid);
+  }
+
+  const LineReading line = readLine();
+  if (!line.detected) {
+    setTank(kTunnelEntryConfirmSpeed, kTunnelEntryConfirmSpeed);
+    updateImu();
+    delay(kLineLoopDelayMs);
+    return;
+  }
+
+  applyLineCommand(line, F("[AFTER DOOR]"));
+  delay(kLineLoopDelayMs);
+}
+
+// ---------------------------------------------------------------------------
 // Mission state handlers
 // ---------------------------------------------------------------------------
 
@@ -2587,9 +3113,22 @@ void updateFollowLineToTunnelEntry() {
 void updateWallFollowTunnel() {
   if (millis() - stateStartMs > kWallTunnelTimeoutMs) {
     stopMotors();
-    Serial.println(F("[WARN] wall-follow tunnel timeout; waiting for exit door from current position."));
-    setState(MissionState::WaitExitDoorOpen);
+    Serial.println(F("[WARN] wall-follow tunnel timeout; switching to line/RFID search from current position."));
+    setState(MissionState::FollowLineToFirstGridRfid);
     return;
+  }
+
+  const LineReading exitLine = readLine();
+  if (exitLine.detected) {
+    if (wallExitLineStableCount < 255) wallExitLineStableCount++;
+    if (wallExitLineStableCount >= kWallExitLineStableFrames) {
+      stopMotors();
+      Serial.println(F("[TUNNEL EXIT] QTR line found; leaving wall following and following line to first grid RFID."));
+      setState(MissionState::FollowLineToFirstGridRfid);
+      return;
+    }
+  } else {
+    wallExitLineStableCount = 0;
   }
 
   const DoorReading door = readDoor();
@@ -2615,8 +3154,8 @@ void updateWaitExitDoorOpen() {
   printDoorStatus(F("[EXIT DOOR WAIT]"), door);
 
   if (opened) {
-    Serial.println(F("[EXIT DOOR] open; driving forward until first RFID."));
-    setState(MissionState::SearchFirstRfid);
+    Serial.println(F("[EXIT DOOR] open; following line to first grid RFID when available."));
+    setState(MissionState::FollowLineToFirstGridRfid);
   }
   delay(20);
 }
@@ -2693,6 +3232,22 @@ void updateMission() {
       updateAlignOverRfid();
       break;
 
+    case MissionState::FollowLineToFirstGridRfid:
+      updateFollowLineToFirstGridRfid();
+      break;
+
+    case MissionState::EasyGridRoute:
+      updateEasyGridRoute();
+      break;
+
+    case MissionState::EasyDoorRequest:
+      updateEasyDoorRequest();
+      break;
+
+    case MissionState::EasyAfterDoorForward:
+      updateEasyAfterDoorForward();
+      break;
+
     case MissionState::Done:
       stopMotors();
       updateImu();
@@ -2747,6 +3302,12 @@ bool initializeMissionSensorsForRun() {
     digitalWrite(kFrontTrigPin, LOW);
     digitalWrite(kLeftTrigPin, LOW);
     digitalWrite(kRightTrigPin, LOW);
+
+    pinMode(kServoPin, OUTPUT);
+    if (kResetServoAtStartup) {
+      moveServoToAngle(kServoMinAngle);
+      holdServoAngle(kServoMinAngle, 500);
+    }
 
     pinMode(kLeftEncoderAPin, INPUT_PULLUP);
     pinMode(kLeftEncoderBPin, INPUT_PULLUP);
