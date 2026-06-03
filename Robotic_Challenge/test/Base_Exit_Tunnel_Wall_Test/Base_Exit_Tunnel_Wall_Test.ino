@@ -38,7 +38,10 @@
 //   7. At every grid RFID: drive 75 mm to center the hole, stop, query the
 //      server, plant only if fertile=true and planted=false, then continue.
 //   8. After the first grid RFID turn right, then execute the fixed RFID-count
-//      route: 2L,3L,1L,2R,1R,2L,1L,3R,1R,3L,1L,3R,1L+openAirlock.
+//      route: 2L,3L,1L,2R,1R,2L,1L,3R,1R,3L,1L,3R,1L+openAirlock B.
+//   9. After requesting B, follow the line until six no-line frames or 12 s,
+//      wall-follow the return tunnel, and abandon wall following as soon as
+//      the QTR array sees the base line again.
 //
 // Hardware:
 //   QTR CTRL odd/even -> D2/D3
@@ -108,6 +111,7 @@ constexpr int kRfidAlignSpeed = 260;  // Encoder-drive speed for final RFID alig
 // center over the hole, stop and wait for the server, then plant only if the
 // server reports fertile=true and planted=false.
 constexpr uint8_t kWallExitLineStableFrames = 2;  // Consecutive line frames needed to leave wall following.
+constexpr uint8_t kReturnWallExitLineStableFrames = 1;  // Return trip: one QTR line frame immediately resumes line following.
 constexpr float kGridPlantCenterOffsetMm = 75.0f;  // Drive after each grid RFID before querying/planting.
 constexpr int kGridPlantOffsetSpeed = 360;  // Encoder-drive speed for the 75 mm RFID-to-hole offset.
 constexpr bool kPlantIfNoServerReply = false;  // true only for offline bench tests.
@@ -284,6 +288,9 @@ enum class MissionState {
   EasyGridRoute,
   EasyDoorRequest,
   EasyAfterDoorForward,
+  ReturnLineToTunnelEntry,
+  ReturnWallFollowTunnel,
+  ReturnFollowLineToBase,
   Done,
   Stopped
 };
@@ -409,6 +416,8 @@ uint8_t eventStableCount = 0;
 uint8_t doorClosedStableCount = 0;
 uint8_t doorOpenStableCount = 0;
 uint8_t wallExitLineStableCount = 0;
+uint8_t returnTunnelNoLineCount = 0;
+uint8_t returnWallExitLineStableCount = 0;
 uint8_t easyRouteIndex = 0;
 uint8_t easySegmentRfidCount = 0;
 uint8_t seedsPlanted = 0;
@@ -571,6 +580,9 @@ const __FlashStringHelper *stateName(MissionState state) {
     case MissionState::EasyGridRoute: return F("EASY_GRID_ROUTE");
     case MissionState::EasyDoorRequest: return F("EASY_DOOR_REQUEST");
     case MissionState::EasyAfterDoorForward: return F("EASY_AFTER_DOOR_FORWARD");
+    case MissionState::ReturnLineToTunnelEntry: return F("RETURN_LINE_TO_TUNNEL_ENTRY");
+    case MissionState::ReturnWallFollowTunnel: return F("RETURN_WALL_FOLLOW_TUNNEL");
+    case MissionState::ReturnFollowLineToBase: return F("RETURN_FOLLOW_LINE_TO_BASE");
     case MissionState::Done: return F("DONE");
     case MissionState::Stopped: return F("STOPPED");
     default: return F("UNKNOWN");
@@ -802,9 +814,18 @@ void setState(MissionState newState) {
   if (newState == MissionState::WallFollowTunnel) {
     wallExitLineStableCount = 0;
   }
+  if (newState == MissionState::ReturnLineToTunnelEntry) {
+    returnTunnelNoLineCount = 0;
+    resetLineController();
+  }
+  if (newState == MissionState::ReturnWallFollowTunnel) {
+    returnWallExitLineStableCount = 0;
+    resetWallController();
+  }
   if (newState == MissionState::FollowLineToFirstGridRfid ||
       newState == MissionState::EasyGridRoute ||
-      newState == MissionState::EasyAfterDoorForward) {
+      newState == MissionState::EasyAfterDoorForward ||
+      newState == MissionState::ReturnFollowLineToBase) {
     resetLineController();
   }
   Serial.print(F("[STATE] "));
@@ -1071,6 +1092,8 @@ void restartMission() {
   eventStableCount = 0;
   tunnelEntryNoLineCount = 0;
   wallExitLineStableCount = 0;
+  returnTunnelNoLineCount = 0;
+  returnWallExitLineStableCount = 0;
   easyRouteIndex = 0;
   easySegmentRfidCount = 0;
   seedsPlanted = 0;
@@ -2103,9 +2126,12 @@ void onWifiMessage(const MessageMetadata& metadata, const uint8_t* payload, size
     return;
   }
 
-  if (strstr(msg, "type=openAirlockReply") && strstr(msg, "airlock=A")) {
+  if (strstr(msg, "type=openAirlockReply")) {
     airlockAccepted = strstr(msg, "accepted=true") != nullptr;
-    Serial.print(F("[AIRLOCK] reply accepted="));
+    Serial.print(F("[AIRLOCK] reply "));
+    if (strstr(msg, "airlock=B")) Serial.print(F("B "));
+    else if (strstr(msg, "airlock=A")) Serial.print(F("A "));
+    Serial.print(F("accepted="));
     Serial.println(airlockAccepted ? F("YES") : F("NO"));
   }
 }
@@ -2196,17 +2222,23 @@ bool waitForWifiBeforeCalibration() {
 }
 
 /**
- * Request the server to open exit airlock A.
+ * Request the server to open an airlock.
  *
  * MiniMessenger README documents the payload as key=value text, including
  * type=openAirlock, airlock=A/B, tag_id, and board_id.
  *
- * @param uid RFID UID read at the base-exit tag.
+ * @param uid RFID UID read at the relevant door tag.
+ * @param airlock Airlock letter, usually 'A' when leaving base and 'B' when returning.
  * @return true if the message was queued for sending.
  */
-bool sendAirlockOpenRequest(const String &uid) {
+bool sendAirlockOpenRequest(const String &uid, char airlock) {
+  airlock = toupper(airlock);
+  if (airlock != 'A' && airlock != 'B') airlock = 'A';
+
   if (!messenger.isConnected()) {
-    Serial.println(F("[AIRLOCK] WiFi not connected; cannot request airlock A yet."));
+    Serial.print(F("[AIRLOCK] WiFi not connected; cannot request airlock "));
+    Serial.print(airlock);
+    Serial.println(F(" yet."));
     return false;
   }
 
@@ -2214,8 +2246,9 @@ bool sendAirlockOpenRequest(const String &uid) {
   snprintf(
       msg,
       sizeof(msg),
-      "type=openAirlock team_id=%s airlock=A tag_id=%s board_id=%s",
+      "type=openAirlock team_id=%s airlock=%c tag_id=%s board_id=%s",
       GROUP_ID,
+      airlock,
       uid.c_str(),
       kBoardId);
 
@@ -2225,6 +2258,16 @@ bool sendAirlockOpenRequest(const String &uid) {
   Serial.print(F(" ok="));
   Serial.println(ok ? F("YES") : F("NO"));
   return ok;
+}
+
+/**
+ * Backwards-compatible wrapper for the original base-exit airlock A request.
+ *
+ * @param uid RFID UID read at the base-exit tag.
+ * @return true if the message was queued for sending.
+ */
+bool sendAirlockOpenRequest(const String &uid) {
+  return sendAirlockOpenRequest(uid, 'A');
 }
 
 /**
@@ -2355,13 +2398,28 @@ bool waitForWifiBeforeCalibration() {
  * Log the airlock request that would be sent if MiniMessenger were enabled.
  *
  * @param uid RFID UID read at the base-exit tag.
+ * @param airlock Airlock letter, usually 'A' or 'B'.
  * @return false because no network request was sent.
  */
-bool sendAirlockOpenRequest(const String &uid) {
-  Serial.print(F("[AIRLOCK] WiFi disabled. Would send: type=openAirlock team_id=<GROUP_ID> airlock=A tag_id="));
+bool sendAirlockOpenRequest(const String &uid, char airlock) {
+  airlock = toupper(airlock);
+  if (airlock != 'A' && airlock != 'B') airlock = 'A';
+  Serial.print(F("[AIRLOCK] WiFi disabled. Would send: type=openAirlock team_id=<GROUP_ID> airlock="));
+  Serial.print(airlock);
+  Serial.print(F(" tag_id="));
   Serial.print(uid);
   Serial.println(F(" board_id=<kBoardId>. Copy secrets.example.h to secrets.h to enable."));
   return false;
+}
+
+/**
+ * Log the base-exit airlock A request that would be sent if MiniMessenger were enabled.
+ *
+ * @param uid RFID UID read at the base-exit tag.
+ * @return false because no network request was sent.
+ */
+bool sendAirlockOpenRequest(const String &uid) {
+  return sendAirlockOpenRequest(uid, 'A');
 }
 
 /**
@@ -2984,22 +3042,22 @@ void updateEasyDoorRequest() {
   stopMotors();
   const String uid = lastGridUid.length() > 0 ? lastGridUid : lastUid;
   if (uid.length() == 0) {
-    Serial.println(F("[AIRLOCK] no RFID UID available for final door request."));
-    setState(MissionState::EasyAfterDoorForward);
+    Serial.println(F("[AIRLOCK] no RFID UID available for return airlock B request; starting return line search anyway."));
+    setState(MissionState::ReturnLineToTunnelEntry);
     return;
   }
 
   if (!easyDoorRequestSent) {
-    easyDoorRequestSent = sendAirlockOpenRequest(uid);
+    easyDoorRequestSent = sendAirlockOpenRequest(uid, 'B');
   }
 
   if (easyDoorRequestSent) {
-    Serial.println(F("[AIRLOCK] final request sent; continuing forward."));
-    setState(MissionState::EasyAfterDoorForward);
+    Serial.println(F("[AIRLOCK] return airlock B request sent; follow line until tunnel/no-line handoff."));
+    setState(MissionState::ReturnLineToTunnelEntry);
     return;
   }
 
-  Serial.println(F("[AIRLOCK] final request not sent yet; retrying."));
+  Serial.println(F("[AIRLOCK] return airlock B request not sent yet; retrying."));
   delay(kAirlockRequestRetryMs);
 }
 
@@ -3022,6 +3080,75 @@ void updateEasyAfterDoorForward() {
   }
 
   applyLineCommand(line, F("[AFTER DOOR]"));
+  delay(kLineLoopDelayMs);
+}
+
+/**
+ * After requesting return airlock B, follow the line toward the return tunnel.
+ *
+ * Handoff to wall following happens when the QTR line disappears for six
+ * consecutive frames, or after the same 12 second timeout used on base exit.
+ */
+void updateReturnLineToTunnelEntry() {
+  if (millis() - stateStartMs > kLineToDoorTimeoutMs) {
+    stopMotors();
+    Serial.println(F("[RETURN] line-to-tunnel timeout after B request; starting return wall follow."));
+    resetWallController();
+    setState(MissionState::ReturnWallFollowTunnel);
+    return;
+  }
+
+  const LineReading line = readLine();
+  if (!line.detected) {
+    if (returnTunnelNoLineCount < 255) returnTunnelNoLineCount++;
+    if (returnTunnelNoLineCount >= kTunnelEntryNoLineFrames) {
+      stopMotors();
+      Serial.println(F("[RETURN] line disappeared for 6 frames; starting return wall follow."));
+      resetWallController();
+      setState(MissionState::ReturnWallFollowTunnel);
+      return;
+    }
+
+    setTank(kTunnelEntryConfirmSpeed, kTunnelEntryConfirmSpeed);
+    updateImu();
+    delay(kLineLoopDelayMs);
+    return;
+  }
+
+  returnTunnelNoLineCount = 0;
+  applyLineCommand(line, F("[RETURN TO TUNNEL]"));
+  delay(kLineLoopDelayMs);
+}
+
+/**
+ * Wall-follow back through the return tunnel.
+ *
+ * Unlike the outbound tunnel state, this does not go to RFID search when the
+ * line reappears. It immediately resumes normal line following back to base.
+ */
+void updateReturnWallFollowTunnel() {
+  const LineReading line = readLine();
+  if (line.detected) {
+    if (returnWallExitLineStableCount < 255) returnWallExitLineStableCount++;
+    if (returnWallExitLineStableCount >= kReturnWallExitLineStableFrames) {
+      stopMotors();
+      Serial.println(F("[RETURN] QTR line found; leaving wall following and following line back to base."));
+      setState(MissionState::ReturnFollowLineToBase);
+      return;
+    }
+  } else {
+    returnWallExitLineStableCount = 0;
+  }
+
+  runWallFollowStep();
+}
+
+/**
+ * Follow the rediscovered line back toward base.
+ */
+void updateReturnFollowLineToBase() {
+  const LineReading line = readLine();
+  applyLineCommand(line, F("[RETURN BASE]"));
   delay(kLineLoopDelayMs);
 }
 
@@ -3246,6 +3373,18 @@ void updateMission() {
 
     case MissionState::EasyAfterDoorForward:
       updateEasyAfterDoorForward();
+      break;
+
+    case MissionState::ReturnLineToTunnelEntry:
+      updateReturnLineToTunnelEntry();
+      break;
+
+    case MissionState::ReturnWallFollowTunnel:
+      updateReturnWallFollowTunnel();
+      break;
+
+    case MissionState::ReturnFollowLineToBase:
+      updateReturnFollowLineToBase();
       break;
 
     case MissionState::Done:
