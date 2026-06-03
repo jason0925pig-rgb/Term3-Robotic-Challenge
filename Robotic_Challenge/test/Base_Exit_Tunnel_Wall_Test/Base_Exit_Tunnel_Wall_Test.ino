@@ -70,8 +70,8 @@ constexpr uint8_t kRouteTurnCount = 4;  // Four committed route turns from start
 
 // Distance to roll forward after a line event before making a 90 degree turn.
 // Tune these for the sensor-to-wheel-axis geometry on your robot.
-constexpr float kFirstTAdvanceMm = 100.0f;  // Distance to drive after detecting the first T before turning.
-constexpr float kSharpTurnAdvanceMm = 100.0f;  // Distance to drive after later hard-turn events before turning.
+constexpr float kFirstTAdvanceMm = 70.0f;  // Distance to drive after detecting the first T before turning.
+constexpr float kSharpTurnAdvanceMm = 70.0f;  // Distance to drive after later hard-turn events before turning.
 constexpr int kRouteAdvanceSpeed = 300;  // Motor speed used for the short pre-turn advance.
 
 // After the first outside RFID is detected, drive this extra distance so the
@@ -128,7 +128,7 @@ constexpr uint32_t kEventCooldownMs = 500;  // Ignore all route events briefly a
 constexpr int kReacquireTurnSpeed = 150;  // Slow spin speed used to find the line after a turn.
 constexpr uint32_t kReacquireTimeoutMs = 1400;  // Maximum time to actively reacquire line after turning.
 constexpr uint8_t kReacquireStableFrames = 3;  // Center-line frames required to finish reacquisition.
-constexpr uint32_t kPostTurnHardIgnoreMs = 110;  // Ignore hard-left/right readings briefly after each scripted turn.
+constexpr uint32_t kPostTurnHardIgnoreMs = 1100;  // Ignore hard-left/right readings briefly after each scripted turn.
 constexpr uint8_t kPostTurnHardReleaseFrames = 4;  // Centered frames needed before re-enabling hard-turn route events.
 constexpr int kPostTurnSoftErrorClamp = 650;  // Max line error used while soft-following through the post-turn ignore window.
 
