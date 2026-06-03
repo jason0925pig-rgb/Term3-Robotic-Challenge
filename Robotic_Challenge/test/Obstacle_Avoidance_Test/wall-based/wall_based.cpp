@@ -1,4 +1,4 @@
-#include "line_based.h"
+#include "wall_based.h"
 
 #include <Wire.h>
 #include <Motoron.h>
@@ -8,12 +8,12 @@
 #include <Adafruit_Sensor.h>
 
 // ============================================================================
-// obstacle_avoidance
-// Test 7 high-level state machine.
-//
-// This file intentionally owns only the Test 7 mission logic. It reuses the
-// primitive headers for motor control, encoders, line following, sonar, and IMU
-// turns.
+// obstacle_avoidance wall-based variant
+// The state flow matches the line-based Test 7 manoeuvre, but all movement
+// while beside the obstacle uses side-sonar PID wall following instead of just
+// driving forward. The controlled sonar side is always obstacleFacingSide:
+//   swerve left  -> obstacle on robot right
+//   swerve right -> obstacle on robot left
 // ============================================================================
 
 #include "../constants.h"
@@ -31,22 +31,22 @@
 // ============================================================================
 // Run tuning variables
 // ============================================================================
-//
-// These are the values to tune during robot runs. They are deliberately mutable
-// so they can be adjusted with Serial Monitor commands without recompiling.
 
-float obstacleAheadThresholdMm = 200.0f;        // First obstacle detection while line following.
-float frontSafetyStopMm = 20.0f;                // Emergency front stop while manoeuvring.
-float sameSideDistanceToleranceMm = 35.0f;      // "Current ~= reference" side-distance band.
-float clearedSideDistanceIncreaseMm = 90.0f;    // "Wall gone" when side distance grows by this much.
-float rfidCenteringForwardOffsetMm = 220.0f;    // Drive after RFID detection to center robot on tag.
-int manoeuvreSpeed = 260;                       // Slow controlled speed for off-line segments.
-uint32_t movementTimeoutMs = 12000;             // Per moving state failsafe.
-uint32_t rfidNodeDebounceMs = 900;              // Prevent double counting one tag.
-uint32_t debugPrintIntervalMs = 500;              // 0 = print every loop, otherwise throttle.
-uint8_t postObstacleNodeTarget = 3;             // Required nodes after returning to line.
-uint8_t maxSidewaysGridSpaces = 4;              // Failsafe for one-node obstacle.
-uint8_t maxPassingGridSpaces = 4;               // Failsafe for one-node obstacle.
+
+
+
+float obstacleAheadThresholdMm = 200.0f;
+float frontSafetyStopMm = 20.0f;
+float sameSideDistanceToleranceMm = 35.0f;
+float clearedSideDistanceIncreaseMm = 90.0f;
+float rfidCenteringForwardOffsetMm = 175.0f;    // Drive after RFID detection to center robot on tag.
+int manoeuvreSpeed = 260;
+uint32_t movementTimeoutMs = 12000;
+uint32_t rfidNodeDebounceMs = 900;
+uint32_t debugPrintIntervalMs = 500;
+uint8_t postObstacleNodeTarget = 3;
+uint8_t maxSidewaysGridSpaces = 4;
+uint8_t maxPassingGridSpaces = 4;
 WallSide fallbackSwerveDirection = WallSide::Left;
 
 constexpr uint8_t kRfidAddress = 0x28;
@@ -171,6 +171,13 @@ void resetLineControllerHistory() {
   lineIntegral = 0.0f;
   lastLineError = 0;
   lastSeenLineError = 0;
+}
+
+void applyLineFollowWithoutDelay() {
+  latestLine = readLine();
+  const MotorCommand cmd = computeLineMotorCommand(latestLine);
+  if (latestLine.mode == FollowMode::Stopped) stopMotors();
+  else setTank(cmd.left, cmd.right);
 }
 
 bool handleMechanicalKillSwitch() {
@@ -301,7 +308,7 @@ void chooseSwerveDirection() {
 
 bool obstacleSideCleared(float currentMm) {
   if (referenceObstacleSideMm < 0.0f) return false;
-  if (currentMm < 0.0f) return true; // No echo usually means the obstacle is out of side range.
+  if (currentMm < 0.0f) return true;
   return currentMm > referenceObstacleSideMm + clearedSideDistanceIncreaseMm;
 }
 
@@ -328,12 +335,12 @@ void driveForwardSlow() {
   setTank(manoeuvreSpeed, manoeuvreSpeed);
 }
 
-void applyLineFollowWithoutDelay() {
-  latestLine = readLine();
-  const MotorCommand cmd = computeLineMotorCommand(latestLine);
-  if (latestLine.mode == FollowMode::Stopped) stopMotors();
-  else setTank(cmd.left, cmd.right);
-}
+// void applyLineFollowWithoutDelay() {
+//   latestLine = readLine();
+//   const MotorCommand cmd = computeLineMotorCommand(latestLine);
+//   if (latestLine.mode == FollowMode::Stopped) stopMotors();
+//   else setTank(cmd.left, cmd.right);
+// }
 
 void handleAlignmentTagSearch() {
   if (!movementSafetyOk()) return;
@@ -422,42 +429,42 @@ void handleRfidCenterOffsetDrive() {
   setTank(base - correction, base + correction);
 }
 
-void handleRfidLineFollowMovement(uint8_t *counter, uint8_t maxCounter, Test7State nextState) {
-  if (!movementSafetyOk()) return;
+// void handleRfidLineFollowMovement(uint8_t *counter, uint8_t maxCounter, Test7State nextState) {
+//   if (!movementSafetyOk()) return;
 
-  applyLineFollowWithoutDelay();
+//   applyLineFollowWithoutDelay();
 
-  String uid;
-  if (!pollGridNode(&uid)) return;
+//   String uid;
+//   if (!pollGridNode(&uid)) return;
 
-  (*counter)++;
-  stopMotors();
-  latestSonar = readSonars();
-  currentObstacleSideMm = sonarDistanceForSide(obstacleFacingSide, latestSonar);
-  if (!sonarValidForSide(obstacleFacingSide, latestSonar)) {
-    currentObstacleSideMm = -1.0f;
-  }
+//   (*counter)++;
+//   stopMotors();
+//   latestSonar = readSonars();
+//   currentObstacleSideMm = sonarDistanceForSide(obstacleFacingSide, latestSonar);
+//   if (!sonarValidForSide(obstacleFacingSide, latestSonar)) {
+//     currentObstacleSideMm = -1.0f;
+//   }
 
-  Serial.print(F("[NODE] uid="));
-  Serial.print(uid);
-  Serial.print(F(" count="));
-  Serial.print(*counter);
-  Serial.print(F(" sideMm="));
-  Serial.println(currentObstacleSideMm, 1);
+//   Serial.print(F("[NODE] uid="));
+//   Serial.print(uid);
+//   Serial.print(F(" count="));
+//   Serial.print(*counter);
+//   Serial.print(F(" sideMm="));
+//   Serial.println(currentObstacleSideMm, 1);
 
-  if (obstacleSideCleared(currentObstacleSideMm)) {
-    beginEncoderCenteringToState(nextState);
-    return;
-  }
+//   if (obstacleSideCleared(currentObstacleSideMm)) {
+//     beginEncoderCenteringToState(nextState);
+//     return;
+//   }
 
-  if (!obstacleStillBeside(currentObstacleSideMm)) {
-    Serial.println(F("[SIDE] ambiguous side distance; continuing cautiously."));
-  }
+//   if (!obstacleStillBeside(currentObstacleSideMm)) {
+//     Serial.println(F("[SIDE] ambiguous side distance; continuing cautiously."));
+//   }
 
-  if (*counter >= maxCounter) {
-    setSafeStop("side_clear_not_found");
-  }
-}
+//   if (*counter >= maxCounter) {
+//     setSafeStop("side_clear_not_found");
+//   }
+// }
 
 void handleReturnToLineOffset() {
   if (!movementSafetyOk()) return;
@@ -480,6 +487,137 @@ void handleReturnToLineOffset() {
     }
   }
 }
+
+void resetWallControllerHistory() {
+  wallIntegral = 0.0f;
+  lastWallErrorMm = 0.0f;
+  lastWallUpdateMs = millis();
+}
+
+float obstacleWallTargetDistanceMm() {
+  return referenceObstacleSideMm > 0.0f ? referenceObstacleSideMm : kTargetWallDistanceMm;
+}
+
+int obstacleWallCorrectionLimit() {
+  const int ratioCorrectionLimit = maxWallCorrectionFromRatioLimit(manoeuvreSpeed);
+  return min(kWallMaxCorrection, ratioCorrectionLimit);
+}
+
+MotorCommand computeObstacleWallFollowCommand(WallSide side, float distanceMm, bool *validOut) {
+  MotorCommand cmd;
+
+  if (!isValidSonarDistance(distanceMm)) {
+    *validOut = false;
+    return cmd;
+  }
+  *validOut = true;
+
+  const uint32_t now = millis();
+  float dt = (now - lastWallUpdateMs) / 1000.0f;
+  lastWallUpdateMs = now;
+  if (dt <= 0.0f || dt > 0.25f) dt = kWallLoopDelayMs / 1000.0f;
+
+  const float targetMm = obstacleWallTargetDistanceMm();
+  const float errorMm = distanceMm - targetMm;
+  wallIntegral += errorMm * dt;
+  wallIntegral = constrain(wallIntegral, -kWallIntegralClamp, kWallIntegralClamp);
+
+  const float derivative = (errorMm - lastWallErrorMm) / dt;
+  lastWallErrorMm = errorMm;
+
+  const float pid = kWallKp * errorMm + kWallKi * wallIntegral + kWallKd * derivative;
+  const int correctionLimit = obstacleWallCorrectionLimit();
+  const int correction = constrain(static_cast<int>(pid), -correctionLimit, correctionLimit);
+
+  const int turnLeftCorrection = side == WallSide::Left ? correction : -correction;
+  cmd.left = manoeuvreSpeed - turnLeftCorrection;
+  cmd.right = manoeuvreSpeed + turnLeftCorrection;
+
+  if (millis() - lastWallPrintMs >= kWallPrintIntervalMs) {
+    lastWallPrintMs = millis();
+    Serial.print(F("[OBS_WALL] controlSide="));
+    Serial.print(sideName(side));
+    Serial.print(F(" distMm="));
+    Serial.print(distanceMm, 1);
+    Serial.print(F(" target="));
+    Serial.print(targetMm, 1);
+    Serial.print(F(" err="));
+    Serial.print(errorMm, 1);
+    Serial.print(F(" corr="));
+    Serial.print(correction);
+    Serial.print(F(" L="));
+    Serial.print(cmd.left);
+    Serial.print(F(" R="));
+    Serial.println(cmd.right);
+  }
+
+  return cmd;
+}
+
+bool applyObstacleWallFollowStep() {
+  bool validDistance = false;
+  const float distanceMm = selectedWallDistanceMm(obstacleFacingSide, latestSonar, &validDistance);
+
+  if (!validDistance) {
+    stopMotors();
+    Serial.print(F("[OBS_WALL] no valid "));
+    Serial.print(sideName(obstacleFacingSide));
+    Serial.println(F(" sonar distance."));
+    delay(80);
+    return false;
+  }
+
+  bool validCommand = false;
+  const MotorCommand cmd = computeObstacleWallFollowCommand(
+      obstacleFacingSide, distanceMm, &validCommand);
+  if (validCommand) {
+    setTank(cmd.left, cmd.right);
+  } else {
+    stopMotors();
+  }
+  return validCommand;
+}
+
+void handleRfidSideClearMovement(uint8_t *counter, uint8_t maxCounter, Test7State nextState) {
+  if (!movementSafetyOk()) return;
+
+  if (!applyObstacleWallFollowStep()) return;
+
+  String uid;
+  if (!pollGridNode(&uid)) return;
+
+  (*counter)++;
+  stopMotors();
+  latestSonar = readSonars();
+  currentObstacleSideMm = sonarDistanceForSide(obstacleFacingSide, latestSonar);
+  if (!sonarValidForSide(obstacleFacingSide, latestSonar)) {
+    currentObstacleSideMm = -1.0f;
+  }
+
+  Serial.print(F("[NODE] uid="));
+  Serial.print(uid);
+  Serial.print(F(" count="));
+  Serial.print(*counter);
+  Serial.print(F(" controlSide="));
+  Serial.print(sideName(obstacleFacingSide));
+  Serial.print(F(" sideMm="));
+  Serial.println(currentObstacleSideMm, 1);
+
+  if (obstacleSideCleared(currentObstacleSideMm)) {
+    transitionTo(nextState);
+    return;
+  }
+
+  if (!obstacleStillBeside(currentObstacleSideMm)) {
+    Serial.println(F("[SIDE] ambiguous side distance; continuing cautiously."));
+  }
+
+  if (*counter >= maxCounter) {
+    setSafeStop("side_clear_not_found");
+  }
+}
+
+
 
 void handlePostObstacleLineFollow() {
   if (!movementSafetyOk()) return;
@@ -509,8 +647,7 @@ void printRunSettings() {
   Serial.print(F("  frontSafetyStopMm=")); Serial.println(frontSafetyStopMm, 1);
   Serial.print(F("  sameSideDistanceToleranceMm=")); Serial.println(sameSideDistanceToleranceMm, 1);
   Serial.print(F("  clearedSideDistanceIncreaseMm=")); Serial.println(clearedSideDistanceIncreaseMm, 1);
-  Serial.print(F("  rfidCenteringForwardOffsetMm=")); Serial.println(rfidCenteringForwardOffsetMm, 1);
-  Serial.print(F("  manoeuvreSpeed=")); Serial.println(manoeuvreSpeed);
+  Serial.print(F("  wallFollowBaseSpeed=")); Serial.println(manoeuvreSpeed);
   Serial.print(F("  movementTimeoutMs=")); Serial.println(movementTimeoutMs);
   Serial.print(F("  rfidNodeDebounceMs=")); Serial.println(rfidNodeDebounceMs);
   Serial.print(F("  debugPrintIntervalMs=")); Serial.println(debugPrintIntervalMs);
@@ -524,7 +661,7 @@ void printHelp() {
   Serial.println(F("Serial commands:"));
   Serial.println(F("  stop | resume | show | vars"));
   Serial.println(F("  obs 120 | safe 90 | same 35 | clear 90"));
-  Serial.println(F("  align 175 | speed 260 | timeout 12000 | debounce 900"));
+  Serial.println(F("  speed 260 | timeout 12000 | debounce 900"));
   Serial.println(F("  debug 0"));
   Serial.println(F("  post 3 | maxaway 4 | maxpass 4"));
   Serial.println(F("  fallback left | fallback right"));
@@ -534,7 +671,7 @@ void printDebugSnapshot() {
   if (debugPrintIntervalMs > 0 && millis() - lastDebugPrintMs < debugPrintIntervalMs) return;
   lastDebugPrintMs = millis();
 
-  Serial.print(F("[T7] state="));
+  Serial.print(F("[T7W] state="));
   Serial.print(stateName(test7State));
   Serial.print(F(" yaw="));
   Serial.print(yawDeg, 2);
@@ -548,7 +685,7 @@ void printDebugSnapshot() {
   Serial.print(latestSonar.rightValid ? latestSonar.rightMm : -1.0f, 1);
   Serial.print(F(" swerve="));
   Serial.print(sideName(swerveDirection));
-  Serial.print(F(" obsSide="));
+  Serial.print(F(" controlSide="));
   Serial.print(sideName(obstacleFacingSide));
   Serial.print(F(" refSide="));
   Serial.print(referenceObstacleSideMm, 1);
@@ -560,10 +697,6 @@ void printDebugSnapshot() {
   Serial.print(gridSpacesPassing);
   Serial.print(F(" post="));
   Serial.print(postObstacleRfidCount);
-  Serial.print(F(" alignNext="));
-  Serial.print(stateName(rfidCenteringNextState));
-  Serial.print(F(" killPaused="));
-  Serial.print(killPaused ? F("YES") : F("NO"));
   Serial.print(F(" stop="));
   Serial.println(stopReason);
 }
@@ -584,17 +717,15 @@ void processSerialCommand(String line) {
     return;
   }
   if (lower == "stop") {
-    killPaused = false;
     serialStopped = true;
     setSafeStop("serial_stop");
     return;
   }
   if (lower == "resume") {
-    const Test7State nextState = killPaused ? resumeAfterKillState : Test7State::FollowLine;
-    killPaused = false;
     serialStopped = false;
     stopReason = "none";
-    transitionTo(nextState);
+    resetWallControllerHistory();
+    transitionTo(Test7State::FollowLine);
     return;
   }
   if (lower == "fallback left") {
@@ -626,8 +757,6 @@ void processSerialCommand(String line) {
     sameSideDistanceToleranceMm = constrain(value, 5.0f, 200.0f);
   } else if (key == "clear") {
     clearedSideDistanceIncreaseMm = constrain(value, 10.0f, 500.0f);
-  } else if (key == "align") {
-    rfidCenteringForwardOffsetMm = constrain(value, 0.0f, 500.0f);
   } else if (key == "speed") {
     manoeuvreSpeed = constrain(static_cast<int>(value), 80, kMaxMotorCommand);
   } else if (key == "timeout") {
@@ -704,9 +833,10 @@ void setup() {
   initializeRfid();
   initializeImu();
   resetLineControllerHistory();
+  resetWallControllerHistory();
   transitionTo(Test7State::FollowLine);
 
-  Serial.println(F("Test 7 obstacle_avoidance ready."));
+  Serial.println(F("Test 7 obstacle_avoidance wall-based ready."));
   printHelp();
   printRunSettings();
 }
@@ -744,10 +874,10 @@ void loop() {
       Serial.println(sideName(obstacleFacingSide));
       beginFindAndCenterOnNextRfid(Test7State::TurnAway, false);
       break;
-
+    
     case Test7State::FindAlignmentTag:
-      handleAlignmentTagSearch();
-      break;
+    handleAlignmentTagSearch();
+    break;
 
     case Test7State::DriveRfidCenterOffset:
       handleRfidCenterOffsetDrive();
@@ -763,18 +893,23 @@ void loop() {
       updateLatestSensors();
       referenceObstacleSideMm = sonarDistanceForSide(obstacleFacingSide, latestSonar);
       if (!sonarValidForSide(obstacleFacingSide, latestSonar)) {
-        referenceObstacleSideMm = -1.0f;
+        setSafeStop("missing_reference_side_distance");
+        break;
       }
       gridSpacesAway = 0;
+      resetWallControllerHistory();
       beginFindAndCenterOnNextRfid(Test7State::MoveSidewaysAroundObstacle, true);
       break;
     }
 
+    //////////////////////////////////////////
+    // IMPORTANT: up until here everything seems good
+    // Tested: NO
+    //////////////////////////////////////////
+
     case Test7State::MoveSidewaysAroundObstacle:
-      handleRfidLineFollowMovement(
-          &gridSpacesAway,
-          maxSidewaysGridSpaces,
-          Test7State::TurnParallelToOriginal);
+      handleRfidSideClearMovement(
+          &gridSpacesAway, maxSidewaysGridSpaces, Test7State::TurnParallelToOriginal);
       break;
 
     case Test7State::TurnParallelToOriginal: {
@@ -785,15 +920,14 @@ void loop() {
       }
       headingOffsetFromOriginalDeg += turnDeg;
       gridSpacesPassing = 0;
+      resetWallControllerHistory();
       transitionTo(Test7State::PassObstacle);
       break;
     }
 
     case Test7State::PassObstacle:
-      handleRfidLineFollowMovement(
-          &gridSpacesPassing,
-          maxPassingGridSpaces,
-          Test7State::TurnBackTowardLine);
+      handleRfidSideClearMovement(
+          &gridSpacesPassing, maxPassingGridSpaces, Test7State::TurnBackTowardLine);
       break;
 
     case Test7State::TurnBackTowardLine: {
@@ -804,10 +938,11 @@ void loop() {
       }
       headingOffsetFromOriginalDeg += turnDeg;
       returnGridSpaces = 0;
+      resetWallControllerHistory();
       transitionTo(Test7State::ReturnToOriginalLineOffset);
       break;
     }
-    
+
     case Test7State::ReturnToOriginalLineOffset:
       handleReturnToLineOffset();
       break;
@@ -822,6 +957,7 @@ void loop() {
       }
       headingOffsetFromOriginalDeg = 0.0f;
       resetLineControllerHistory();
+      resetWallControllerHistory();
       postObstacleRfidCount = 0;
       transitionTo(Test7State::FollowLineAfterObstacle);
       break;
@@ -834,7 +970,7 @@ void loop() {
     case Test7State::Complete:
       stopMotors();
       if (!completeAnnounced) {
-        Serial.println(F("[DONE] Test 7 obstacle manoeuvre complete."));
+        Serial.println(F("[DONE] Test 7 wall-based obstacle manoeuvre complete."));
         completeAnnounced = true;
       }
       break;
@@ -843,9 +979,6 @@ void loop() {
       stopMotors();
       break;
   }
-
-  // applyLineFollowStep();
-  // setTank(manoeuvreSpeed, manoeuvreSpeed);
 
   printDebugSnapshot();
 }
