@@ -13,7 +13,7 @@
 // Behavior:
 //   1. Follow the solid grid line using the QTR-HD-09RC array.
 //   2. If the line is temporarily lost, drive straight instead of searching.
-//   3. Skip the starting RFID tag if kSkipFirstRfidAtStart is true.
+//   3. Plant from the first RFID tag detected.
 //   4. Plant 5 seeds while driving this route:
 //        forward 2 nodes -> right 90 deg -> forward 1 node ->
 //        left 90 deg -> forward 2 nodes.
@@ -39,14 +39,14 @@
 constexpr uint32_t kSerialBaud = 115200;
 
 // Trial Run 2 solid-grid route.
-constexpr float kPlantingOffsetMm = 205.0f;     // RFID detect point -> seed drop point.
+constexpr float kPlantingOffsetMm = 90.0f;     // RFID detect point -> seed drop point.
 constexpr uint8_t kRequiredSeeds = 5;           // Total seeds to drop for this manoeuvre.
-constexpr bool kSkipFirstRfidAtStart = true;    // Challenge path has 6 tags but only 5 seed drops.
+constexpr bool kSkipFirstRfidAtStart = false;   // false = the first detected RFID immediately plants.
 constexpr uint32_t kStartUidIgnoreMs = 1500;    // Ignore the skipped start tag briefly while driving away.
 constexpr uint8_t kRightTurnAfterSeed = 2;      // After 2 planted nodes, make the right turn.
 constexpr uint8_t kLeftTurnAfterSeed = 3;       // After 3 planted nodes, make the left turn.
-constexpr float kRightTurnDeg = -90.0f;         // Positive target is LEFT in this IMU convention.
-constexpr float kLeftTurnDeg = 90.0f;
+constexpr float kFirstTurnTargetYawDeg = -90.0f; // Absolute yaw target: right turn from startup heading.
+constexpr float kSecondTurnTargetYawDeg = 0.0f;  // Absolute yaw target: return to startup heading.
 constexpr uint32_t kPauseAfterRfidMs = 250;
 constexpr uint32_t kPauseAfterPlantMs = 300;
 constexpr uint32_t kPauseAfterTurnMs = 500;
@@ -64,7 +64,7 @@ constexpr int kDefaultSearchTurnSpeed = 220;
 constexpr float kDefaultLineKp = 0.8f;
 constexpr float kDefaultLineKi = 0.0f;
 constexpr float kDefaultLineKd = 0.08f;
-constexpr uint16_t kDefaultLineThreshold = 230;
+constexpr uint16_t kDefaultLineThreshold = 650;
 constexpr uint16_t kStrongLineThreshold = 650;
 constexpr int kHardTurnError = 2600;
 constexpr int kCenterRecoverError = 900;
@@ -72,6 +72,13 @@ constexpr uint8_t kIntegralClamp = 120;
 constexpr uint32_t kLinePrintIntervalMs = 160;
 constexpr uint32_t kLoopDelayMs = 8;
 constexpr bool kDriveStraightIfLineLost = true;
+constexpr uint8_t kStraightIfInactiveSensorsAtLeast = 8; // If 8/9 sensors miss the line, drive straight.
+constexpr bool kUseImuStraightWhenLineLost = true;
+constexpr float kDefaultImuStraightKp = 4.0f;
+constexpr float kDefaultImuStraightKi = 0.0f;
+constexpr float kDefaultImuStraightKd = 0.15f;
+constexpr float kImuStraightIntegralClamp = 80.0f;
+constexpr int kDefaultImuStraightMaxCorrection = 180;
 
 // Latest measured raw values from QTR_Raw_Read_Test.
 // For RC QTR sensors, darker surfaces generally produce larger timing values.
@@ -146,6 +153,7 @@ constexpr bool kReturnServoAfterDrop = false;   // Requested behavior: do not re
 // Mechanical kill.
 constexpr bool kUseKillPin = true;
 constexpr uint8_t kKillPin = 32;
+constexpr uint32_t kKillDebounceMs = 250;
 
 constexpr float kPi = 3.1415926f;
 constexpr float kRadToDeg = 57.2957795f;
@@ -173,6 +181,12 @@ int maxCorrection = kDefaultMaxCorrection;
 int hardTurnSpeed = kDefaultHardTurnSpeed;
 int searchTurnSpeed = kDefaultSearchTurnSpeed;
 uint16_t lineThreshold = kDefaultLineThreshold;
+float imuStraightKp = kDefaultImuStraightKp;
+float imuStraightKi = kDefaultImuStraightKi;
+float imuStraightKd = kDefaultImuStraightKd;
+float imuStraightIntegral = 0.0f;
+int imuStraightMaxCorrection = kDefaultImuStraightMaxCorrection;
+float imuStraightTargetYawDeg = 0.0f;
 int lastLineError = 0;
 int lastSeenLineError = 0;
 float integralLineError = 0.0f;
@@ -193,6 +207,9 @@ uint32_t lastLinePrintMs = 0;
 uint32_t lastTurnPrintMs = 0;
 uint32_t lastRfidPollMs = 0;
 bool serialStopped = false;
+bool killButtonLastRawPressed = false;
+bool killButtonStablePressed = false;
+uint32_t killButtonLastChangeMs = 0;
 int currentServoAngle = kServoMinAngle;
 uint8_t plantingCycleCount = 0;
 uint8_t rfidTagsSeen = 0;
@@ -201,7 +218,8 @@ String skippedStartUid;
 uint32_t ignoreStartUidUntilMs = 0;
 bool startRfidSkipped = false;
 bool completeAnnounced = false;
-float pendingTurnDeg = 0.0f;
+float pendingTurnTargetYawDeg = 0.0f;
+bool pendingTurnActive = false;
 
 enum class MissionState {
   FollowLine,
@@ -222,7 +240,23 @@ enum class FollowMode {
   Stopped
 };
 
+enum class KillButtonEvent {
+  None,
+  Pressed,
+  Released
+};
+
+enum class KillButtonMode {
+  Running,
+  StopPressHeld,
+  StoppedWaitingRestart,
+  RestartPressHeld
+};
+
 MissionState missionState = MissionState::FollowLine;
+KillButtonMode killButtonMode = KillButtonMode::Running;
+
+void restartMissionFromKill();
 
 const __FlashStringHelper *missionName(MissionState state) {
   switch (state) {
@@ -255,6 +289,29 @@ long absLong(long value) {
 
 float absFloat(float value) {
   return value < 0.0f ? -value : value;
+}
+
+float normalizeAngleDeg(float angleDeg) {
+  while (angleDeg > 180.0f) angleDeg -= 360.0f;
+  while (angleDeg <= -180.0f) angleDeg += 360.0f;
+  return angleDeg;
+}
+
+float nearestCardinalYawDeg(float currentYawDeg) {
+  const float candidates[4] = {0.0f, 90.0f, 180.0f, 270.0f};
+  float bestTarget = 0.0f;
+  float bestError = 999.0f;
+
+  for (uint8_t i = 0; i < 4; i++) {
+    const float candidate = normalizeAngleDeg(candidates[i]);
+    const float error = absFloat(normalizeAngleDeg(candidate - currentYawDeg));
+    if (error < bestError) {
+      bestError = error;
+      bestTarget = candidate;
+    }
+  }
+
+  return bestTarget;
 }
 
 int clampMotorSpeed(int speed) {
@@ -311,6 +368,85 @@ void stopMotors() {
   setTank(0, 0);
 }
 
+void requestStop(const __FlashStringHelper *reason) {
+  serialStopped = true;
+  missionState = MissionState::Stopped;
+  stopMotors();
+  Serial.print(F("[KILL] stopped: "));
+  Serial.println(reason);
+}
+
+bool missionAbortRequested() {
+  if (serialStopped) return true;
+  if (killPressed()) {
+    killButtonLastRawPressed = true;
+    killButtonStablePressed = true;
+    killButtonLastChangeMs = millis();
+    if (killButtonMode == KillButtonMode::Running) {
+      killButtonMode = KillButtonMode::StopPressHeld;
+    }
+    requestStop(F("kill button pressed"));
+    return true;
+  }
+  return false;
+}
+
+KillButtonEvent updateKillButtonEvent() {
+  const bool rawPressed = killPressed();
+  const uint32_t now = millis();
+
+  if (rawPressed != killButtonLastRawPressed) {
+    killButtonLastRawPressed = rawPressed;
+    killButtonLastChangeMs = now;
+  }
+
+  if (now - killButtonLastChangeMs < kKillDebounceMs) {
+    return KillButtonEvent::None;
+  }
+
+  if (rawPressed != killButtonStablePressed) {
+    killButtonStablePressed = rawPressed;
+    return killButtonStablePressed ? KillButtonEvent::Pressed : KillButtonEvent::Released;
+  }
+
+  return KillButtonEvent::None;
+}
+
+void handleKillButtonStateMachine(KillButtonEvent event) {
+  if (event == KillButtonEvent::None) {
+    return;
+  }
+
+  switch (killButtonMode) {
+    case KillButtonMode::Running:
+      if (event == KillButtonEvent::Pressed) {
+        killButtonMode = KillButtonMode::StopPressHeld;
+        requestStop(F("kill button pressed; release to finish stop"));
+      }
+      break;
+
+    case KillButtonMode::StopPressHeld:
+      if (event == KillButtonEvent::Released) {
+        killButtonMode = KillButtonMode::StoppedWaitingRestart;
+        Serial.println(F("[KILL] stopped. Press and release D32 again to reset/recalibrate."));
+      }
+      break;
+
+    case KillButtonMode::StoppedWaitingRestart:
+      if (event == KillButtonEvent::Pressed) {
+        killButtonMode = KillButtonMode::RestartPressHeld;
+        Serial.println(F("[KILL] restart armed. Release D32 to reset and recalibrate IMU."));
+      }
+      break;
+
+    case KillButtonMode::RestartPressHeld:
+      if (event == KillButtonEvent::Released) {
+        restartMissionFromKill();
+      }
+      break;
+  }
+}
+
 long distanceMmToCounts(float distanceMm) {
   return static_cast<long>(abs(distanceMm) * kEncoderCountsPerMm * kDistanceCalibration);
 }
@@ -333,17 +469,30 @@ void printSettings() {
   Serial.print(kPlantingOffsetMm, 1);
   Serial.print(F(" turnsAfterSeeds="));
   Serial.print(kRightTurnAfterSeed);
-  Serial.print(F("R,"));
+  Serial.print(F("->yaw "));
+  Serial.print(kFirstTurnTargetYawDeg, 1);
+  Serial.print(F(", "));
   Serial.print(kLeftTurnAfterSeed);
-  Serial.print(F("L"));
+  Serial.print(F("->yaw "));
+  Serial.print(kSecondTurnTargetYawDeg, 1);
   Serial.print(F(" lineP="));
   Serial.print(lineKp, 3);
   Serial.print(F(" lineD="));
   Serial.print(lineKd, 3);
+  Serial.print(F(" imuLineLostP="));
+  Serial.print(imuStraightKp, 3);
+  Serial.print(F(" imuLineLostI="));
+  Serial.print(imuStraightKi, 3);
+  Serial.print(F(" imuLineLostD="));
+  Serial.print(imuStraightKd, 3);
+  Serial.print(F(" imuTarget="));
+  Serial.print(imuStraightTargetYawDeg, 1);
   Serial.print(F(" turnP="));
   Serial.print(turnKp, 2);
   Serial.print(F(" turnD="));
   Serial.print(turnKd, 2);
+  Serial.print(F(" yaw="));
+  Serial.print(yawDeg, 2);
   Serial.print(F(" servoAngle="));
   Serial.print(currentServoAngle);
   Serial.print(F(" stopped="));
@@ -354,8 +503,9 @@ void printHelp() {
   Serial.println(F("Serial commands:"));
   Serial.println(F("  stop | resume | show"));
   Serial.println(F("  linep 0.8 | lined 0.08 | base 400 | th 230"));
+  Serial.println(F("  imup 4.0 | imui 0 | imud 0.15 | imumax 180"));
   Serial.println(F("  turnp 500 | turnd 0 | turnmax 600 | turnmin 115"));
-  Serial.println(F("Route: skip start tag if enabled, plant 5 seeds: 2 nodes, right, 1 node, left, 2 nodes."));
+  Serial.println(F("Route: plant 5 seeds: 2 nodes, absolute yaw -90, 1 node, return to startup yaw 0, 2 nodes."));
 }
 
 void processSerialCommand(String line) {
@@ -376,16 +526,20 @@ void processSerialCommand(String line) {
   if (lower == "stop") {
     serialStopped = true;
     missionState = MissionState::Stopped;
+    killButtonMode = KillButtonMode::StoppedWaitingRestart;
     stopMotors();
     Serial.println(F("[SERIAL] stopped."));
     return;
   }
   if (lower == "resume") {
     serialStopped = false;
+    killButtonMode = KillButtonMode::Running;
     completeAnnounced = false;
     integralLineError = 0.0f;
+    imuStraightIntegral = 0.0f;
     lastLineError = 0;
-    pendingTurnDeg = 0.0f;
+    pendingTurnTargetYawDeg = 0.0f;
+    pendingTurnActive = false;
     missionState = MissionState::FollowLine;
     Serial.println(F("[SERIAL] resumed from line following."));
     return;
@@ -407,6 +561,14 @@ void processSerialCommand(String line) {
     lineKi = value;
   } else if (key == "lined") {
     lineKd = value;
+  } else if (key == "imup") {
+    imuStraightKp = value;
+  } else if (key == "imui") {
+    imuStraightKi = value;
+  } else if (key == "imud") {
+    imuStraightKd = value;
+  } else if (key == "imumax") {
+    imuStraightMaxCorrection = constrain(static_cast<int>(value), 0, 800);
   } else if (key == "base") {
     baseSpeed = constrain(static_cast<int>(value), 0, 800);
   } else if (key == "th") {
@@ -529,16 +691,24 @@ uint8_t activeSensorCount(uint16_t threshold) {
   return count;
 }
 
+uint8_t inactiveSensorCount(uint16_t threshold) {
+  return 9 - activeSensorCount(threshold);
+}
+
+bool tooFewSensorsSeeLine() {
+  return inactiveSensorCount(lineThreshold) >= kStraightIfInactiveSensorsAtLeast;
+}
+
 bool centerHasLine() {
   return qtrNorm[3] >= lineThreshold || qtrNorm[4] >= lineThreshold || qtrNorm[5] >= lineThreshold;
 }
 
 FollowMode chooseFollowMode(int error) {
-  if (serialStopped || killPressed()) {
+  if (missionAbortRequested()) {
     return FollowMode::Stopped;
   }
 
-  if (!lineDetected) {
+  if (!lineDetected || tooFewSensorsSeeLine()) {
     integralLineError = 0.0f;
     lastLineError = 0;
     if (kDriveStraightIfLineLost) {
@@ -572,8 +742,24 @@ void computeLineMotorCommand(FollowMode mode, int error, int *leftSpeed, int *ri
       *rightSpeed = 0;
       return;
     case FollowMode::LineLostStraight:
-      *leftSpeed = baseSpeed;
-      *rightSpeed = baseSpeed;
+      if (kUseImuStraightWhenLineLost && imuOk) {
+        imuStraightTargetYawDeg = nearestCardinalYawDeg(yawDeg);
+        const float imuErrorDeg = normalizeAngleDeg(imuStraightTargetYawDeg - yawDeg);
+        imuStraightIntegral += imuErrorDeg;
+        imuStraightIntegral = constrain(
+            imuStraightIntegral, -kImuStraightIntegralClamp, kImuStraightIntegralClamp);
+
+        int imuCorrection = static_cast<int>(
+            imuStraightKp * imuErrorDeg + imuStraightKi * imuStraightIntegral -
+            imuStraightKd * gyroZDegPerSec);
+        imuCorrection = constrain(imuCorrection, -imuStraightMaxCorrection, imuStraightMaxCorrection);
+
+        *leftSpeed = baseSpeed - imuCorrection;
+        *rightSpeed = baseSpeed + imuCorrection;
+      } else {
+        *leftSpeed = baseSpeed;
+        *rightSpeed = baseSpeed;
+      }
       return;
     case FollowMode::SearchLeft:
       *leftSpeed = -searchTurnSpeed;
@@ -596,6 +782,7 @@ void computeLineMotorCommand(FollowMode mode, int error, int *leftSpeed, int *ri
       break;
   }
 
+  imuStraightIntegral = 0.0f;
   integralLineError += error / 1000.0f;
   integralLineError = constrain(integralLineError, -static_cast<float>(kIntegralClamp), static_cast<float>(kIntegralClamp));
 
@@ -625,6 +812,8 @@ void printLineStatus(FollowMode mode, int position, int error, int leftSpeed, in
   Serial.print(lineDetected ? F("YES") : F("NO"));
   Serial.print(F(" active="));
   Serial.print(activeSensorCount(lineThreshold));
+  Serial.print(F(" inactive="));
+  Serial.print(inactiveSensorCount(lineThreshold));
   Serial.print(F(" pos="));
   Serial.print(position);
   Serial.print(F(" err="));
@@ -633,6 +822,12 @@ void printLineStatus(FollowMode mode, int position, int error, int leftSpeed, in
   Serial.print(leftSpeed);
   Serial.print(F(" R="));
   Serial.print(rightSpeed);
+  Serial.print(F(" yaw="));
+  Serial.print(yawDeg, 1);
+  Serial.print(F(" imuTarget="));
+  Serial.print(imuStraightTargetYawDeg, 1);
+  Serial.print(F(" imuErr="));
+  Serial.print(normalizeAngleDeg(imuStraightTargetYawDeg - yawDeg), 1);
   Serial.print(F(" uid="));
   if (lastUid.length() > 0) {
     Serial.println(lastUid);
@@ -682,7 +877,7 @@ void holdServoAngle(int angle, uint32_t durationMs) {
   const uint32_t start = millis();
   while (millis() - start < durationMs) {
     handleSerialCommands();
-    if (killPressed() || serialStopped) {
+    if (missionAbortRequested()) {
       stopMotors();
       return;
     }
@@ -736,7 +931,7 @@ bool updateImu() {
 
   const float rawGyroZDps = gyro.gyro.z * kRadToDeg;
   gyroZDegPerSec = (rawGyroZDps - gyroZBiasDps) * kImuYawSign;
-  yawDeg += gyroZDegPerSec * dt;
+  yawDeg = normalizeAngleDeg(yawDeg + gyroZDegPerSec * dt);
   return true;
 }
 
@@ -792,7 +987,7 @@ bool driveDistanceMm(float distanceMm, int speed) {
   const uint32_t start = millis();
   while (true) {
     handleSerialCommands();
-    if (serialStopped || killPressed()) {
+    if (missionAbortRequested()) {
       stopMotors();
       return false;
     }
@@ -841,7 +1036,7 @@ void encoderOnlyTurnFallback(float degrees, int speed) {
   const uint32_t start = millis();
   while (true) {
     handleSerialCommands();
-    if (serialStopped || killPressed()) break;
+    if (missionAbortRequested()) break;
 
     const long averageAbs = (absLong(getLeftCount()) + absLong(getRightCount())) / 2;
     if (averageAbs >= targetCounts) break;
@@ -857,32 +1052,41 @@ void encoderOnlyTurnFallback(float degrees, int speed) {
   stopMotors();
 }
 
-bool turnDegreesImu(float targetDeg) {
+bool turnDegreesImu(float targetYawDeg) {
+  targetYawDeg = normalizeAngleDeg(targetYawDeg);
+  updateImu();
+  const float initialErrorDeg = normalizeAngleDeg(targetYawDeg - yawDeg);
+
   if (!imuOk) {
-    encoderOnlyTurnFallback(targetDeg, turnMaxSpeed);
+    encoderOnlyTurnFallback(initialErrorDeg, turnMaxSpeed);
+    yawDeg = normalizeAngleDeg(yawDeg + initialErrorDeg);
     return true;
   }
 
-  const long encoderTarget = turnDegreesToEncoderCounts(targetDeg);
-  Serial.print(F("[TURN] IMU targetDeg="));
-  Serial.print(targetDeg, 1);
+  const float startYawDeg = yawDeg;
+  const long encoderTarget = turnDegreesToEncoderCounts(initialErrorDeg);
+  Serial.print(F("[TURN] IMU absoluteTargetYaw="));
+  Serial.print(targetYawDeg, 1);
+  Serial.print(F(" startYaw="));
+  Serial.print(startYawDeg, 1);
+  Serial.print(F(" initialError="));
+  Serial.print(initialErrorDeg, 1);
   Serial.print(F(" encoderTarget="));
   Serial.println(encoderTarget);
 
   resetEncoders();
-  resetYaw();
   lastTurnPrintMs = 0;
   const uint32_t start = millis();
 
   while (true) {
     handleSerialCommands();
-    if (serialStopped || killPressed()) {
+    if (missionAbortRequested()) {
       stopMotors();
       return false;
     }
 
     updateImu();
-    const float errorDeg = targetDeg - yawDeg;
+    const float errorDeg = normalizeAngleDeg(targetYawDeg - yawDeg);
     const float absError = absFloat(errorDeg);
     if (absError <= kTurnToleranceDeg && absFloat(gyroZDegPerSec) <= kGyroStopRateDps) {
       Serial.println(F("[TURN] IMU target reached."));
@@ -903,13 +1107,13 @@ bool turnDegreesImu(float targetDeg) {
     balanceCorrection = constrain(balanceCorrection, -kMaxEncoderBalanceCorrection, kMaxEncoderBalanceCorrection);
 
     setTurnCommand(signedCommand, balanceCorrection);
-    printTurnStatus("[IMUTurn]", targetDeg, errorDeg, signedCommand, encoderTarget);
+    printTurnStatus("[IMUTurn]", targetYawDeg, errorDeg, signedCommand, encoderTarget);
     delay(10);
   }
 
   stopMotors();
   updateImu();
-  printTurnStatus("[IMUTurn final]", targetDeg, targetDeg - yawDeg, 0, encoderTarget);
+  printTurnStatus("[IMUTurn final]", targetYawDeg, normalizeAngleDeg(targetYawDeg - yawDeg), 0, encoderTarget);
   return true;
 }
 
@@ -918,7 +1122,7 @@ void pauseStopped(uint32_t durationMs) {
   const uint32_t start = millis();
   while (millis() - start < durationMs) {
     handleSerialCommands();
-    if (serialStopped || killPressed()) {
+    if (missionAbortRequested()) {
       stopMotors();
       return;
     }
@@ -927,17 +1131,22 @@ void pauseStopped(uint32_t durationMs) {
   }
 }
 
-float scheduledTurnAfterSeed(uint8_t seedsPlanted) {
+bool scheduledTurnTargetYawAfterSeed(uint8_t seedsPlanted, float *targetYawDeg) {
   if (seedsPlanted == kRightTurnAfterSeed) {
-    return kRightTurnDeg;
+    *targetYawDeg = kFirstTurnTargetYawDeg;
+    return true;
   }
   if (seedsPlanted == kLeftTurnAfterSeed) {
-    return kLeftTurnDeg;
+    *targetYawDeg = kSecondTurnTargetYawDeg;
+    return true;
   }
-  return 0.0f;
+  *targetYawDeg = 0.0f;
+  return false;
 }
 
 void runLineFollowStep() {
+  updateImu();
+
   String uid;
   if (pollRfid(&uid)) {
     const uint32_t now = millis();
@@ -990,7 +1199,6 @@ void runLineFollowStep() {
   }
 
   printLineStatus(mode, position, error, leftSpeed, rightSpeed);
-  updateImu();
   delay(kLoopDelayMs);
 }
 
@@ -1058,6 +1266,53 @@ bool initializeImu() {
   return true;
 }
 
+void restartMissionFromKill() {
+  stopMotors();
+  Serial.println(F("[KILL] restart requested. Recalibrating IMU and restarting the route."));
+  while (killPressed()) {
+    stopMotors();
+    delay(10);
+  }
+  killButtonLastRawPressed = false;
+  killButtonStablePressed = false;
+  killButtonMode = KillButtonMode::Running;
+  killButtonLastChangeMs = millis();
+
+  resetEncoders();
+  integralLineError = 0.0f;
+  imuStraightIntegral = 0.0f;
+  lastLineError = 0;
+  lastSeenLineError = 0;
+  lineDetected = false;
+  lastLinePrintMs = 0;
+  lastTurnPrintMs = 0;
+  lastRfidPollMs = 0;
+
+  plantingCycleCount = 0;
+  rfidTagsSeen = 0;
+  lastUid = "";
+  skippedStartUid = "";
+  ignoreStartUidUntilMs = 0;
+  startRfidSkipped = false;
+  completeAnnounced = false;
+  pendingTurnTargetYawDeg = 0.0f;
+  pendingTurnActive = false;
+
+  serialStopped = false;
+  missionState = MissionState::FollowLine;
+
+  initializeMotoron();
+  initializeRfid();
+  initializeImu();
+  if (kResetServoAtStartup) {
+    moveServoToAngle(kServoMinAngle);
+    holdServoAngle(kServoMinAngle, 700);
+  }
+
+  Serial.println(F("[KILL] mission restarted from the first RFID."));
+  printSettings();
+}
+
 void setup() {
   Serial.begin(kSerialBaud);
   delay(1500);
@@ -1094,8 +1349,8 @@ void setup() {
   }
 
   Serial.println(F("Solid_Grid_Navigation ready."));
-  Serial.println(F("Route: forward 2 nodes, right 90, forward 1 node, left 90, forward 2 nodes."));
-  Serial.println(F("Line-lost behavior: drive straight until the line is detected again."));
+  Serial.println(F("Route: forward 2 nodes, yaw -90, forward 1 node, return yaw 0, forward 2 nodes."));
+  Serial.println(F("Line-lost behavior: IMU heading hold toward nearest 0/90/180/270 cardinal angle."));
   Serial.print(F("Skip first RFID at start = "));
   Serial.println(kSkipFirstRfidAtStart ? F("YES") : F("NO"));
   Serial.print(F("Motor spec: no-load rpm="));
@@ -1114,10 +1369,11 @@ void setup() {
 void loop() {
   handleSerialCommands();
 
-  if (killPressed()) {
-    serialStopped = true;
-    missionState = MissionState::Stopped;
-    stopMotors();
+  const KillButtonEvent killEvent = updateKillButtonEvent();
+  handleKillButtonStateMachine(killEvent);
+  if ((serialStopped || missionState == MissionState::Stopped) &&
+      killButtonMode == KillButtonMode::Running && !killPressed()) {
+    killButtonMode = KillButtonMode::StoppedWaitingRestart;
   }
 
   switch (missionState) {
@@ -1136,33 +1392,41 @@ void loop() {
     case MissionState::DropSeed:
       dropOneSeedNoReturn();
       plantingCycleCount++;
-      pendingTurnDeg = scheduledTurnAfterSeed(plantingCycleCount);
+      pendingTurnActive = scheduledTurnTargetYawAfterSeed(plantingCycleCount, &pendingTurnTargetYawDeg);
       Serial.print(F("[ROUTE] seeds planted="));
       Serial.print(plantingCycleCount);
       Serial.print(F("/"));
       Serial.print(kRequiredSeeds);
-      Serial.print(F(" pendingTurnDeg="));
-      Serial.println(pendingTurnDeg, 1);
+      Serial.print(F(" pendingTurn="));
+      if (pendingTurnActive) {
+        Serial.print(F("absolute yaw "));
+        Serial.println(pendingTurnTargetYawDeg, 1);
+      } else {
+        Serial.println(F("none"));
+      }
       pauseStopped(kPauseAfterPlantMs);
       if (plantingCycleCount >= kRequiredSeeds) {
         missionState = MissionState::Complete;
-      } else if (absFloat(pendingTurnDeg) > 0.1f) {
+      } else if (pendingTurnActive) {
         missionState = MissionState::TurnScheduled;
       } else {
         integralLineError = 0.0f;
+        imuStraightIntegral = 0.0f;
         lastLineError = 0;
         missionState = MissionState::FollowLine;
       }
       break;
 
     case MissionState::TurnScheduled:
-      if (turnDegreesImu(pendingTurnDeg)) {
-        pendingTurnDeg = 0.0f;
+      if (turnDegreesImu(pendingTurnTargetYawDeg)) {
+        pendingTurnTargetYawDeg = 0.0f;
+        pendingTurnActive = false;
         pauseStopped(kPauseAfterTurnMs);
         if (plantingCycleCount >= kRequiredSeeds) {
           missionState = MissionState::Complete;
         } else {
           integralLineError = 0.0f;
+          imuStraightIntegral = 0.0f;
           lastLineError = 0;
           missionState = MissionState::FollowLine;
         }

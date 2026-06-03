@@ -1,17 +1,18 @@
 # Robot code v1 notes
 
-`main.ino` is the Arduino-style entry point for this first version.
-The current PlatformIO project will compile every `.cpp` file in `src/`
-plus this `.ino` sketch.
+The active Arduino-style sketch is selected by `src_dir` in
+`Robotic_Challenge/platformio.ini`.
 
-Edit `Config.h` first for the values that will be tuned most often:
+Use `platformio.ini` to switch between the main sketch and test sketches.
+Most tuning values currently live near the top of the active `.ino` file or
+in the matching helper headers for that sketch:
 
 - motor speed and turn parameters
 - RFID-to-planting offset distance
 - Modulino Distance hole/floor thresholds
 - DS-R005 300 degree servo pulse range and 60 degree seed-release step
 - obstacle stop threshold
-- WiFi SSID/password
+- WiFi SSID/password via a local `secrets.h`
 - 11.1V battery divider resistor values
 - LDR divider resistor value
 

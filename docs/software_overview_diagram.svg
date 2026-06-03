@@ -1,0 +1,465 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3600" height="3050" viewBox="0 0 3600 3050">
+<defs>
+  <marker id="arrow" markerWidth="16" markerHeight="16" refX="12" refY="6" orient="auto" markerUnits="strokeWidth">
+    <path d="M2,2 L12,6 L2,10 Z" fill="#64748b" />
+  </marker>
+  <style>
+    text { font-family: Inter, Segoe UI, Arial, sans-serif; dominant-baseline: alphabetic; }
+  </style>
+</defs>
+<rect width="3600" height="3050" fill="#f7f9fc"/>
+
+<rect x="55" y="35" width="3490" height="150" rx="26" fill="#ffffff" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<text x="1800.0" y="90" font-size="44" font-weight="850" fill="#111827" text-anchor="middle">Software Overview Diagram - Robotics Challenge Robot</text>
+<text x="1800.0" y="132" font-size="24" font-weight="500" fill="#4b5563" text-anchor="middle">Arduino GIGA R1 WiFi control software: sensing -&gt; state estimation -&gt; mission decisions -&gt; control -&gt; actuators</text>
+<text x="1800.0" y="165" font-size="22" font-weight="650" fill="#2563eb" text-anchor="middle">Includes pin map, I2C addresses, route strategies, line-loss policy, planting flow, and safety overrides</text>
+<rect x="70" y="220" width="640" height="64" rx="16" fill="#ffffff" stroke="#d1d5db" stroke-width="2" opacity="1"/>
+<rect x="70" y="220" width="640" height="64" rx="16" fill="#2563eb" opacity="0.13"/>
+<text x="390.0" y="262" font-size="28" font-weight="850" fill="#2563eb" text-anchor="middle">1. Hardware Inputs</text>
+<rect x="760" y="220" width="620" height="64" rx="16" fill="#ffffff" stroke="#d1d5db" stroke-width="2" opacity="1"/>
+<rect x="760" y="220" width="620" height="64" rx="16" fill="#0f766e" opacity="0.13"/>
+<text x="1070.0" y="262" font-size="28" font-weight="850" fill="#0f766e" text-anchor="middle">2. Signal Processing</text>
+<rect x="1450" y="220" width="720" height="64" rx="16" fill="#ffffff" stroke="#d1d5db" stroke-width="2" opacity="1"/>
+<rect x="1450" y="220" width="720" height="64" rx="16" fill="#7c3aed" opacity="0.13"/>
+<text x="1810.0" y="262" font-size="28" font-weight="850" fill="#7c3aed" text-anchor="middle">3. Mission Decisions</text>
+<rect x="2240" y="220" width="600" height="64" rx="16" fill="#ffffff" stroke="#d1d5db" stroke-width="2" opacity="1"/>
+<rect x="2240" y="220" width="600" height="64" rx="16" fill="#d97706" opacity="0.13"/>
+<text x="2540.0" y="262" font-size="28" font-weight="850" fill="#d97706" text-anchor="middle">4. Control Algorithms</text>
+<rect x="2910" y="220" width="520" height="64" rx="16" fill="#ffffff" stroke="#d1d5db" stroke-width="2" opacity="1"/>
+<rect x="2910" y="220" width="520" height="64" rx="16" fill="#059669" opacity="0.13"/>
+<text x="3170.0" y="262" font-size="28" font-weight="850" fill="#059669" text-anchor="middle">5. Actuator Outputs</text>
+<rect x="70" y="300" width="640" height="215" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="70" y="300" width="640" height="58" rx="18" fill="#2563eb" opacity="0.11"/>
+<rect x="70" y="300" width="8" height="215" rx="4" fill="#2563eb"/>
+<text x="94" y="339" font-size="25" font-weight="750" fill="#2563eb" text-anchor="start">QTR-HD-09RC Reflectance Array</text>
+<text x="94" y="382" font-size="21" font-weight="400" fill="#111827">- CTRL odd/even: D2 / D3</text>
+<text x="94" y="412" font-size="21" font-weight="400" fill="#111827">- 9 RC channels: D22-D30, left-to-right</text>
+<text x="94" y="442" font-size="21" font-weight="400" fill="#111827">- Raw timing -&gt; normalized 0-1000</text>
+<text x="94" y="472" font-size="21" font-weight="400" fill="#111827">- Default line threshold: th = 650; tune in Serial</text>
+<text x="94" y="502" font-size="21" font-weight="400" fill="#111827">- Primary sensor when driving on solid black grid</text>
+<text x="94" y="532" font-size="21" font-weight="400" fill="#111827">  lines</text>
+<rect x="70" y="540" width="640" height="215" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="70" y="540" width="640" height="58" rx="18" fill="#2563eb" opacity="0.11"/>
+<rect x="70" y="540" width="8" height="215" rx="4" fill="#2563eb"/>
+<text x="94" y="579" font-size="25" font-weight="750" fill="#2563eb" text-anchor="start">RFID2 Reader</text>
+<text x="94" y="622" font-size="21" font-weight="400" fill="#111827">- I2C Wire bus: D20 SDA / D21 SCL</text>
+<text x="94" y="652" font-size="21" font-weight="400" fill="#111827">- Address: 0x28</text>
+<text x="94" y="682" font-size="21" font-weight="400" fill="#111827">- Detects grid node / hole tag UID</text>
+<text x="94" y="712" font-size="21" font-weight="400" fill="#111827">- Triggers planting, rescue alignment, coordinate</text>
+<text x="94" y="742" font-size="21" font-weight="400" fill="#111827">  update, and server query</text>
+<rect x="70" y="780" width="640" height="215" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="70" y="780" width="640" height="58" rx="18" fill="#2563eb" opacity="0.11"/>
+<rect x="70" y="780" width="8" height="215" rx="4" fill="#2563eb"/>
+<text x="94" y="819" font-size="25" font-weight="750" fill="#2563eb" text-anchor="start">ICM20948 IMU</text>
+<text x="94" y="862" font-size="21" font-weight="400" fill="#111827">- I2C Wire bus: D20 SDA / D21 SCL</text>
+<text x="94" y="892" font-size="21" font-weight="400" fill="#111827">- Address: 0x68</text>
+<text x="94" y="922" font-size="21" font-weight="400" fill="#111827">- Startup gyro bias calibration; yaw = 0 at initial</text>
+<text x="94" y="952" font-size="21" font-weight="400" fill="#111827">  heading</text>
+<text x="94" y="982" font-size="21" font-weight="400" fill="#111827">- Used for absolute turn targets: -90 deg then back to</text>
+<text x="94" y="1012" font-size="21" font-weight="400" fill="#111827">  0 deg</text>
+<rect x="70" y="1020" width="640" height="245" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="70" y="1020" width="640" height="58" rx="18" fill="#2563eb" opacity="0.11"/>
+<rect x="70" y="1020" width="8" height="245" rx="4" fill="#2563eb"/>
+<text x="94" y="1059" font-size="25" font-weight="750" fill="#2563eb" text-anchor="start">Motor Encoders</text>
+<text x="94" y="1102" font-size="21" font-weight="400" fill="#111827">- Left C1/C2: D34 / D35</text>
+<text x="94" y="1132" font-size="21" font-weight="400" fill="#111827">- Right C1/C2: D36 / D37</text>
+<text x="94" y="1162" font-size="21" font-weight="400" fill="#111827">- C1 rising-edge interrupt; C2 gives direction</text>
+<text x="94" y="1192" font-size="21" font-weight="400" fill="#111827">- 7 PPR motor shaft x 1:150 gearbox = 1050</text>
+<text x="94" y="1222" font-size="21" font-weight="400" fill="#111827">  counts/wheel rev</text>
+<text x="94" y="1252" font-size="21" font-weight="400" fill="#111827">- Used for distance, offset-to-hole, and encoder-</text>
+<text x="94" y="1282" font-size="21" font-weight="400" fill="#111827">  balanced straight drive</text>
+<rect x="70" y="1295" width="640" height="230" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="70" y="1295" width="640" height="58" rx="18" fill="#2563eb" opacity="0.11"/>
+<rect x="70" y="1295" width="8" height="230" rx="4" fill="#2563eb"/>
+<text x="94" y="1334" font-size="25" font-weight="750" fill="#2563eb" text-anchor="start">HC-SR04 Sonars</text>
+<text x="94" y="1377" font-size="21" font-weight="400" fill="#111827">- Front trig/echo: D8 / D11</text>
+<text x="94" y="1407" font-size="21" font-weight="400" fill="#111827">- Left trig/echo: D9 / D12</text>
+<text x="94" y="1437" font-size="21" font-weight="400" fill="#111827">- Right trig/echo: D10 / D13</text>
+<text x="94" y="1467" font-size="21" font-weight="400" fill="#111827">- Echo uses level shifting to 3.3 V for GIGA safety</text>
+<text x="94" y="1497" font-size="21" font-weight="400" fill="#111827">- Used for wall following and advanced obstacle checks</text>
+<rect x="70" y="1555" width="640" height="260" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="70" y="1555" width="640" height="58" rx="18" fill="#2563eb" opacity="0.11"/>
+<rect x="70" y="1555" width="8" height="260" rx="4" fill="#2563eb"/>
+<text x="94" y="1594" font-size="25" font-weight="750" fill="#2563eb" text-anchor="start">Buttons, Light, and Seed Alignment</text>
+<text x="94" y="1637" font-size="21" font-weight="400" fill="#111827">- Mechanical kill button: D32 -&gt; switch -&gt; GND,</text>
+<text x="94" y="1667" font-size="21" font-weight="400" fill="#111827">  INPUT_PULLUP</text>
+<text x="94" y="1697" font-size="21" font-weight="400" fill="#111827">- Revival button: D31 -&gt; switch -&gt; GND, INPUT_PULLUP</text>
+<text x="94" y="1727" font-size="21" font-weight="400" fill="#111827">- LDR voltage divider: A0, with 10 kOhm fixed resistor</text>
+<text x="94" y="1757" font-size="21" font-weight="400" fill="#111827">- Modulino Distance sensor: I2C 0x29, above planting</text>
+<text x="94" y="1787" font-size="21" font-weight="400" fill="#111827">  hole to check alignment</text>
+<text x="94" y="1817" font-size="21" font-weight="400" fill="#111827">- All sensor, servo, motor, and battery grounds share</text>
+<text x="94" y="1847" font-size="21" font-weight="400" fill="#111827">  common GND</text>
+<rect x="70" y="1845" width="640" height="220" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="70" y="1845" width="640" height="58" rx="18" fill="#2563eb" opacity="0.11"/>
+<rect x="70" y="1845" width="8" height="220" rx="4" fill="#2563eb"/>
+<text x="94" y="1884" font-size="25" font-weight="750" fill="#2563eb" text-anchor="start">WiFi / Server Input</text>
+<text x="94" y="1927" font-size="21" font-weight="400" fill="#111827">- GIGA WiFi + MiniMessenger / MQTT</text>
+<text x="94" y="1957" font-size="21" font-weight="400" fill="#111827">- Server can send teacher stop / enable commands</text>
+<text x="94" y="1987" font-size="21" font-weight="400" fill="#111827">- Robot can query all 81 node states at startup</text>
+<text x="94" y="2017" font-size="21" font-weight="400" fill="#111827">- Robot reports planted nodes and receives rescue</text>
+<text x="94" y="2047" font-size="21" font-weight="400" fill="#111827">  requests</text>
+<rect x="760" y="300" width="620" height="245" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="760" y="300" width="620" height="58" rx="18" fill="#0f766e" opacity="0.11"/>
+<rect x="760" y="300" width="8" height="245" rx="4" fill="#0f766e"/>
+<text x="784" y="339" font-size="25" font-weight="750" fill="#0f766e" text-anchor="start">QTR Processing</text>
+<text x="784" y="382" font-size="21" font-weight="400" fill="#111827">- Read RC discharge time for each detector</text>
+<text x="784" y="412" font-size="21" font-weight="400" fill="#111827">- Apply saved min/max calibration</text>
+<text x="784" y="442" font-size="21" font-weight="400" fill="#111827">- Compute qtrNorm[0..8] and weighted line position</text>
+<text x="784" y="472" font-size="21" font-weight="400" fill="#111827">  0-8000</text>
+<text x="784" y="502" font-size="21" font-weight="400" fill="#111827">- lineError = position - 4000</text>
+<text x="784" y="532" font-size="21" font-weight="400" fill="#111827">- active / inactive detector counts are printed for</text>
+<text x="784" y="562" font-size="21" font-weight="400" fill="#111827">  debugging</text>
+<rect x="760" y="575" width="620" height="240" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="760" y="575" width="620" height="58" rx="18" fill="#0f766e" opacity="0.11"/>
+<rect x="760" y="575" width="8" height="240" rx="4" fill="#0f766e"/>
+<text x="784" y="614" font-size="25" font-weight="750" fill="#0f766e" text-anchor="start">Line-Loss Decision</text>
+<text x="784" y="657" font-size="21" font-weight="400" fill="#111827">- Normal: enough detectors see black line -&gt; line</text>
+<text x="784" y="687" font-size="21" font-weight="400" fill="#111827">  PID</text>
+<text x="784" y="717" font-size="21" font-weight="400" fill="#111827">- If 8/9 detectors are below threshold: line is</text>
+<text x="784" y="747" font-size="21" font-weight="400" fill="#111827">  considered lost</text>
+<text x="784" y="777" font-size="21" font-weight="400" fill="#111827">- In solid-grid test: drive straight instead of</text>
+<text x="784" y="807" font-size="21" font-weight="400" fill="#111827">  searching</text>
+<text x="784" y="837" font-size="21" font-weight="400" fill="#111827">- Latest requested behavior: line-lost straight uses</text>
+<text x="784" y="867" font-size="21" font-weight="400" fill="#111827">  encoders, not IMU PID</text>
+<rect x="760" y="845" width="620" height="240" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="760" y="845" width="620" height="58" rx="18" fill="#0f766e" opacity="0.11"/>
+<rect x="760" y="845" width="8" height="240" rx="4" fill="#0f766e"/>
+<text x="784" y="884" font-size="25" font-weight="750" fill="#0f766e" text-anchor="start">RFID Event Processing</text>
+<text x="784" y="927" font-size="21" font-weight="400" fill="#111827">- Poll RFID periodically without blocking main loop</text>
+<text x="784" y="957" font-size="21" font-weight="400" fill="#111827">- Convert UID bytes to readable tag ID</text>
+<text x="784" y="987" font-size="21" font-weight="400" fill="#111827">- In trial run 2: first detected RFID plants</text>
+<text x="784" y="1017" font-size="21" font-weight="400" fill="#111827">  immediately</text>
+<text x="784" y="1047" font-size="21" font-weight="400" fill="#111827">- In full strategy: UID maps to grid node, then</text>
+<text x="784" y="1077" font-size="21" font-weight="400" fill="#111827">  server state is checked</text>
+<rect x="760" y="1115" width="620" height="250" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="760" y="1115" width="620" height="58" rx="18" fill="#0f766e" opacity="0.11"/>
+<rect x="760" y="1115" width="8" height="250" rx="4" fill="#0f766e"/>
+<text x="784" y="1154" font-size="25" font-weight="750" fill="#0f766e" text-anchor="start">Odometry and Distance</text>
+<text x="784" y="1197" font-size="21" font-weight="400" fill="#111827">- Encoder deltas are converted to wheel distance</text>
+<text x="784" y="1227" font-size="21" font-weight="400" fill="#111827">- distance_mm -&gt; target counts using wheel diameter</text>
+<text x="784" y="1257" font-size="21" font-weight="400" fill="#111827">  39 mm</text>
+<text x="784" y="1287" font-size="21" font-weight="400" fill="#111827">- Forward offset after RFID: configurable</text>
+<text x="784" y="1317" font-size="21" font-weight="400" fill="#111827">  kPlantingOffsetMm</text>
+<text x="784" y="1347" font-size="21" font-weight="400" fill="#111827">- For straight sections, left/right encoder count</text>
+<text x="784" y="1377" font-size="21" font-weight="400" fill="#111827">  difference can trim motor commands</text>
+<rect x="760" y="1395" width="620" height="240" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="760" y="1395" width="620" height="58" rx="18" fill="#0f766e" opacity="0.11"/>
+<rect x="760" y="1395" width="8" height="240" rx="4" fill="#0f766e"/>
+<text x="784" y="1434" font-size="25" font-weight="750" fill="#0f766e" text-anchor="start">IMU Yaw Estimation</text>
+<text x="784" y="1477" font-size="21" font-weight="400" fill="#111827">- Read gyro Z from ICM20948</text>
+<text x="784" y="1507" font-size="21" font-weight="400" fill="#111827">- Subtract calibrated gyro bias</text>
+<text x="784" y="1537" font-size="21" font-weight="400" fill="#111827">- Integrate yaw and normalize to -180..180 deg</text>
+<text x="784" y="1567" font-size="21" font-weight="400" fill="#111827">- Do not reset yaw before each turn; startup yaw</text>
+<text x="784" y="1597" font-size="21" font-weight="400" fill="#111827">  remains global reference</text>
+<rect x="760" y="1665" width="620" height="240" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="760" y="1665" width="620" height="58" rx="18" fill="#0f766e" opacity="0.11"/>
+<rect x="760" y="1665" width="8" height="240" rx="4" fill="#0f766e"/>
+<text x="784" y="1704" font-size="25" font-weight="750" fill="#0f766e" text-anchor="start">Sonar Distance Processing</text>
+<text x="784" y="1747" font-size="21" font-weight="400" fill="#111827">- Measure echo pulse width -&gt; distance in mm/cm</text>
+<text x="784" y="1777" font-size="21" font-weight="400" fill="#111827">- Wall following uses left or right sonar depending</text>
+<text x="784" y="1807" font-size="21" font-weight="400" fill="#111827">  on map side / closer wall</text>
+<text x="784" y="1837" font-size="21" font-weight="400" fill="#111827">- Advanced obstacle mode: if front object stays</text>
+<text x="784" y="1867" font-size="21" font-weight="400" fill="#111827">  after confirmation wait, mark cell blocked</text>
+<rect x="760" y="1935" width="620" height="220" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="760" y="1935" width="620" height="58" rx="18" fill="#0f766e" opacity="0.11"/>
+<rect x="760" y="1935" width="8" height="220" rx="4" fill="#0f766e"/>
+<text x="784" y="1974" font-size="25" font-weight="750" fill="#0f766e" text-anchor="start">Server Map Cache</text>
+<text x="784" y="2017" font-size="21" font-weight="400" fill="#111827">- Stores 9 x 9 grid state from server: fertilized /</text>
+<text x="784" y="2047" font-size="21" font-weight="400" fill="#111827">  planted / unavailable</text>
+<text x="784" y="2077" font-size="21" font-weight="400" fill="#111827">- Can preselect target holes before driving</text>
+<text x="784" y="2107" font-size="21" font-weight="400" fill="#111827">- If another robot plants a chosen node, route</text>
+<text x="784" y="2137" font-size="21" font-weight="400" fill="#111827">  planner can reselect targets</text>
+<rect x="1450" y="300" width="720" height="270" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="1450" y="300" width="720" height="58" rx="18" fill="#7c3aed" opacity="0.11"/>
+<rect x="1450" y="300" width="8" height="270" rx="4" fill="#7c3aed"/>
+<text x="1474" y="339" font-size="25" font-weight="750" fill="#7c3aed" text-anchor="start">Strategy Selector</text>
+<text x="1474" y="382" font-size="21" font-weight="400" fill="#111827">- Simple / Trial Run 2: follow solid line, plant fixed 5</text>
+<text x="1474" y="412" font-size="21" font-weight="400" fill="#111827">  seeds, no dynamic obstacle avoidance</text>
+<text x="1474" y="442" font-size="21" font-weight="400" fill="#111827">- Medium demonstrations: fixed trajectories, saving routine,</text>
+<text x="1474" y="472" font-size="21" font-weight="400" fill="#111827">  WiFi kill, servo, motor, sensor tests</text>
+<text x="1474" y="502" font-size="21" font-weight="400" fill="#111827">- Advanced / final: 9 x 9 map planning, rescue tasks,</text>
+<text x="1474" y="532" font-size="21" font-weight="400" fill="#111827">  obstacle confirmation, BFS replanning, emergency return</text>
+<text x="1474" y="562" font-size="21" font-weight="400" fill="#111827">- Marked area: prefer QTR line following; unmarked area:</text>
+<text x="1474" y="592" font-size="21" font-weight="400" fill="#111827">  switch to wall following / odometry</text>
+<rect x="1450" y="600" width="720" height="290" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="1450" y="600" width="720" height="58" rx="18" fill="#7c3aed" opacity="0.11"/>
+<rect x="1450" y="600" width="8" height="290" rx="4" fill="#7c3aed"/>
+<text x="1474" y="639" font-size="25" font-weight="750" fill="#7c3aed" text-anchor="start">Main Mission State Machine</text>
+<text x="1474" y="682" font-size="21" font-weight="400" fill="#111827">- INIT: start Serial, Wire/Wire1, Motoron, RFID, QTR, servo,</text>
+<text x="1474" y="712" font-size="21" font-weight="400" fill="#111827">  IMU calibration</text>
+<text x="1474" y="742" font-size="21" font-weight="400" fill="#111827">- FOLLOW_LINE or WALL_FOLLOW: drive toward next node</text>
+<text x="1474" y="772" font-size="21" font-weight="400" fill="#111827">- RFID_DETECTED: stop, read UID, decide whether to plant /</text>
+<text x="1474" y="802" font-size="21" font-weight="400" fill="#111827">  rescue / continue</text>
+<text x="1474" y="832" font-size="21" font-weight="400" fill="#111827">- DRIVE_OFFSET: ignore line, move fixed distance so seed</text>
+<text x="1474" y="862" font-size="21" font-weight="400" fill="#111827">  chute is above hole</text>
+<text x="1474" y="892" font-size="21" font-weight="400" fill="#111827">- PLANT: servo advances 60 deg, LED / Serial status updates</text>
+<text x="1474" y="922" font-size="21" font-weight="400" fill="#111827">- TURN_SCHEDULED: IMU absolute yaw turn; COMPLETE / STOPPED</text>
+<text x="1474" y="952" font-size="21" font-weight="400" fill="#111827">  states hold motors at 0</text>
+<rect x="1450" y="920" width="720" height="270" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="1450" y="920" width="720" height="58" rx="18" fill="#7c3aed" opacity="0.11"/>
+<rect x="1450" y="920" width="8" height="270" rx="4" fill="#7c3aed"/>
+<text x="1474" y="959" font-size="25" font-weight="750" fill="#7c3aed" text-anchor="start">Planting Decision Logic</text>
+<text x="1474" y="1002" font-size="21" font-weight="400" fill="#111827">- Trial run 2: plant at every detected RFID until 5 seeds are</text>
+<text x="1474" y="1032" font-size="21" font-weight="400" fill="#111827">  dropped</text>
+<text x="1474" y="1062" font-size="21" font-weight="400" fill="#111827">- Full route: ask server whether node is fertilized and not</text>
+<text x="1474" y="1092" font-size="21" font-weight="400" fill="#111827">  planted</text>
+<text x="1474" y="1122" font-size="21" font-weight="400" fill="#111827">- If plantable: drive offset, drop seed, record LDR</text>
+<text x="1474" y="1152" font-size="21" font-weight="400" fill="#111827">  brightness, report planted to server</text>
+<text x="1474" y="1182" font-size="21" font-weight="400" fill="#111827">- If not plantable: continue route or replan if target is no</text>
+<text x="1474" y="1212" font-size="21" font-weight="400" fill="#111827">  longer useful</text>
+<text x="1474" y="1242" font-size="21" font-weight="400" fill="#111827">- Optional Modulino Distance check validates seed hole</text>
+<text x="1474" y="1272" font-size="21" font-weight="400" fill="#111827">  alignment before servo command</text>
+<rect x="1450" y="1220" width="720" height="260" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="1450" y="1220" width="720" height="58" rx="18" fill="#7c3aed" opacity="0.11"/>
+<rect x="1450" y="1220" width="8" height="260" rx="4" fill="#7c3aed"/>
+<text x="1474" y="1259" font-size="25" font-weight="750" fill="#7c3aed" text-anchor="start">Line vs Wall Following Choice</text>
+<text x="1474" y="1302" font-size="21" font-weight="400" fill="#111827">- If QTR line is visible: use line-follow PID</text>
+<text x="1474" y="1332" font-size="21" font-weight="400" fill="#111827">- If 8/9 QTR detectors miss black line: stop trusting line</text>
+<text x="1474" y="1362" font-size="21" font-weight="400" fill="#111827">  sensor</text>
+<text x="1474" y="1392" font-size="21" font-weight="400" fill="#111827">- In solid-grid task: use encoder-balanced straight drive</text>
+<text x="1474" y="1422" font-size="21" font-weight="400" fill="#111827">  until the line appears again</text>
+<text x="1474" y="1452" font-size="21" font-weight="400" fill="#111827">- In open-field / wall-follow tasks: switch to sonar wall</text>
+<text x="1474" y="1482" font-size="21" font-weight="400" fill="#111827">  following with target distance based on grid row/column</text>
+<rect x="1450" y="1510" width="720" height="260" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="1450" y="1510" width="720" height="58" rx="18" fill="#7c3aed" opacity="0.11"/>
+<rect x="1450" y="1510" width="8" height="260" rx="4" fill="#7c3aed"/>
+<text x="1474" y="1549" font-size="25" font-weight="750" fill="#7c3aed" text-anchor="start">Rescue and Saving Routine</text>
+<text x="1474" y="1592" font-size="21" font-weight="400" fill="#111827">- Server rescue request stores one or more rescue coordinates</text>
+<text x="1474" y="1622" font-size="21" font-weight="400" fill="#111827">- Robot continues mission until it reaches the rescue column</text>
+<text x="1474" y="1652" font-size="21" font-weight="400" fill="#111827">  / approach point</text>
+<text x="1474" y="1682" font-size="21" font-weight="400" fill="#111827">- Slow approach after RFID; wait for revival button or two</text>
+<text x="1474" y="1712" font-size="21" font-weight="400" fill="#111827">  RFID detections</text>
+<text x="1474" y="1742" font-size="21" font-weight="400" fill="#111827">- Reverse to previous RFID, drive 7.5 cm forward to center on</text>
+<text x="1474" y="1772" font-size="21" font-weight="400" fill="#111827">  hole, then IMU turn 180 deg and resume</text>
+<rect x="1450" y="1800" width="720" height="275" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="1450" y="1800" width="720" height="58" rx="18" fill="#7c3aed" opacity="0.11"/>
+<rect x="1450" y="1800" width="8" height="275" rx="4" fill="#7c3aed"/>
+<text x="1474" y="1839" font-size="25" font-weight="750" fill="#7c3aed" text-anchor="start">Emergency and Replanning</text>
+<text x="1474" y="1882" font-size="21" font-weight="400" fill="#111827">- Mechanical kill: first press/release stops; second</text>
+<text x="1474" y="1912" font-size="21" font-weight="400" fill="#111827">  press/release resets and recalibrates</text>
+<text x="1474" y="1942" font-size="21" font-weight="400" fill="#111827">- WiFi kill: pause; re-enable can trigger emergency-return</text>
+<text x="1474" y="1972" font-size="21" font-weight="400" fill="#111827">  behavior in relevant tests</text>
+<text x="1474" y="2002" font-size="21" font-weight="400" fill="#111827">- Advanced obstacle: front sonar object -&gt; wait/confirm -&gt;</text>
+<text x="1474" y="2032" font-size="21" font-weight="400" fill="#111827">  mark next cell blocked -&gt; BFS around it</text>
+<text x="1474" y="2062" font-size="21" font-weight="400" fill="#111827">- If remaining match time is low: stop planting and return to</text>
+<text x="1474" y="2092" font-size="21" font-weight="400" fill="#111827">  exit / report brightest recorded hole</text>
+<rect x="2240" y="300" width="600" height="245" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="2240" y="300" width="600" height="58" rx="18" fill="#d97706" opacity="0.11"/>
+<rect x="2240" y="300" width="8" height="245" rx="4" fill="#d97706"/>
+<text x="2264" y="339" font-size="25" font-weight="750" fill="#d97706" text-anchor="start">Line Following PID</text>
+<text x="2264" y="382" font-size="21" font-weight="400" fill="#111827">- Input: lineError from QTR weighted position</text>
+<text x="2264" y="412" font-size="21" font-weight="400" fill="#111827">- Output: left/right motor speed correction</text>
+<text x="2264" y="442" font-size="21" font-weight="400" fill="#111827">- L = base + correction; R = base - correction</text>
+<text x="2264" y="472" font-size="21" font-weight="400" fill="#111827">- Tunable through Serial: linep, linei, lined,</text>
+<text x="2264" y="502" font-size="21" font-weight="400" fill="#111827">  base, th</text>
+<rect x="2240" y="575" width="600" height="245" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="2240" y="575" width="600" height="58" rx="18" fill="#d97706" opacity="0.11"/>
+<rect x="2240" y="575" width="8" height="245" rx="4" fill="#d97706"/>
+<text x="2264" y="614" font-size="25" font-weight="750" fill="#d97706" text-anchor="start">Encoder Distance Control</text>
+<text x="2264" y="657" font-size="21" font-weight="400" fill="#111827">- Input: target mm and encoder counts</text>
+<text x="2264" y="687" font-size="21" font-weight="400" fill="#111827">- Uses average of left/right absolute counts to</text>
+<text x="2264" y="717" font-size="21" font-weight="400" fill="#111827">  stop at target</text>
+<text x="2264" y="747" font-size="21" font-weight="400" fill="#111827">- Uses count difference to keep straight when line</text>
+<text x="2264" y="777" font-size="21" font-weight="400" fill="#111827">  is ignored</text>
+<text x="2264" y="807" font-size="21" font-weight="400" fill="#111827">- Used for planting offset and straight dead-</text>
+<text x="2264" y="837" font-size="21" font-weight="400" fill="#111827">  reckoning segments</text>
+<rect x="2240" y="850" width="600" height="255" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="2240" y="850" width="600" height="58" rx="18" fill="#d97706" opacity="0.11"/>
+<rect x="2240" y="850" width="8" height="255" rx="4" fill="#d97706"/>
+<text x="2264" y="889" font-size="25" font-weight="750" fill="#d97706" text-anchor="start">IMU Absolute Turn Control</text>
+<text x="2264" y="932" font-size="21" font-weight="400" fill="#111827">- Input: target absolute yaw, not relative reset</text>
+<text x="2264" y="962" font-size="21" font-weight="400" fill="#111827">  every turn</text>
+<text x="2264" y="992" font-size="21" font-weight="400" fill="#111827">- First trial turn: target yaw = -90 deg</text>
+<text x="2264" y="1022" font-size="21" font-weight="400" fill="#111827">- Second trial turn: target yaw = 0 deg, returning</text>
+<text x="2264" y="1052" font-size="21" font-weight="400" fill="#111827">  to startup direction</text>
+<text x="2264" y="1082" font-size="21" font-weight="400" fill="#111827">- Program command is strictly equal magnitude and</text>
+<text x="2264" y="1112" font-size="21" font-weight="400" fill="#111827">  opposite direction: left = -cmd, right = +cmd</text>
+<rect x="2240" y="1135" width="600" height="260" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="2240" y="1135" width="600" height="58" rx="18" fill="#d97706" opacity="0.11"/>
+<rect x="2240" y="1135" width="8" height="260" rx="4" fill="#d97706"/>
+<text x="2264" y="1174" font-size="25" font-weight="750" fill="#d97706" text-anchor="start">Wall Following PID</text>
+<text x="2264" y="1217" font-size="21" font-weight="400" fill="#111827">- Used when operating without solid black lines</text>
+<text x="2264" y="1247" font-size="21" font-weight="400" fill="#111827">- Input: left or right sonar distance to wall</text>
+<text x="2264" y="1277" font-size="21" font-weight="400" fill="#111827">- Target distance depends on arena edge and grid</text>
+<text x="2264" y="1307" font-size="21" font-weight="400" fill="#111827">  index</text>
+<text x="2264" y="1337" font-size="21" font-weight="400" fill="#111827">- Optional trigonometric correction can use sonar</text>
+<text x="2264" y="1367" font-size="21" font-weight="400" fill="#111827">  distance x cos(yaw offset)</text>
+<text x="2264" y="1397" font-size="21" font-weight="400" fill="#111827">- Simple/medium demos can disable full obstacle</text>
+<text x="2264" y="1427" font-size="21" font-weight="400" fill="#111827">  avoidance</text>
+<rect x="2240" y="1425" width="600" height="290" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="2240" y="1425" width="600" height="58" rx="18" fill="#d97706" opacity="0.11"/>
+<rect x="2240" y="1425" width="8" height="290" rx="4" fill="#d97706"/>
+<text x="2264" y="1464" font-size="25" font-weight="750" fill="#d97706" text-anchor="start">Path Planning / BFS</text>
+<text x="2264" y="1507" font-size="21" font-weight="400" fill="#111827">- Full map is 9 x 9: rows A-I, columns 1-9</text>
+<text x="2264" y="1537" font-size="21" font-weight="400" fill="#111827">- Start / exit can be C9 -&gt; G9 depending challenge</text>
+<text x="2264" y="1567" font-size="21" font-weight="400" fill="#111827">  version</text>
+<text x="2264" y="1597" font-size="21" font-weight="400" fill="#111827">- Choose plant targets by score, closeness to</text>
+<text x="2264" y="1627" font-size="21" font-weight="400" fill="#111827">  wall, row grouping, and low turn count</text>
+<text x="2264" y="1657" font-size="21" font-weight="400" fill="#111827">- Replan only on: new rescue target, confirmed</text>
+<text x="2264" y="1687" font-size="21" font-weight="400" fill="#111827">  obstacle, emergency return, or selected seed</text>
+<text x="2264" y="1717" font-size="21" font-weight="400" fill="#111827">  becomes planted</text>
+<rect x="2240" y="1745" width="600" height="250" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="2240" y="1745" width="600" height="58" rx="18" fill="#d97706" opacity="0.11"/>
+<rect x="2240" y="1745" width="8" height="250" rx="4" fill="#d97706"/>
+<text x="2264" y="1784" font-size="25" font-weight="750" fill="#d97706" text-anchor="start">Safety Priority Layer</text>
+<text x="2264" y="1827" font-size="21" font-weight="400" fill="#111827">- Highest priority: kill / WiFi stop -&gt; motors = 0</text>
+<text x="2264" y="1857" font-size="21" font-weight="400" fill="#111827">- Next: obstacle or rescue waiting state</text>
+<text x="2264" y="1887" font-size="21" font-weight="400" fill="#111827">- Normal mission decisions only run when safety is</text>
+<text x="2264" y="1917" font-size="21" font-weight="400" fill="#111827">  clear</text>
+<text x="2264" y="1947" font-size="21" font-weight="400" fill="#111827">- All long actions call missionAbortRequested() so</text>
+<text x="2264" y="1977" font-size="21" font-weight="400" fill="#111827">  stop works during servo, turn, and distance</text>
+<text x="2264" y="2007" font-size="21" font-weight="400" fill="#111827">  drive</text>
+<rect x="2910" y="300" width="520" height="245" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="2910" y="300" width="520" height="58" rx="18" fill="#059669" opacity="0.11"/>
+<rect x="2910" y="300" width="8" height="245" rx="4" fill="#059669"/>
+<text x="2934" y="339" font-size="25" font-weight="750" fill="#059669" text-anchor="start">Motoron M3S550 Motor Controller</text>
+<text x="2934" y="382" font-size="21" font-weight="400" fill="#111827">- I2C Wire1 shield bus: SDA1/SCL1</text>
+<text x="2934" y="412" font-size="21" font-weight="400" fill="#111827">- Address: 0x11</text>
+<text x="2934" y="442" font-size="21" font-weight="400" fill="#111827">- M1 = left track, M2 = right track</text>
+<text x="2934" y="472" font-size="21" font-weight="400" fill="#111827">- Motor VIN from external battery / shield</text>
+<text x="2934" y="502" font-size="21" font-weight="400" fill="#111827">  power; common GND</text>
+<rect x="2910" y="575" width="520" height="245" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="2910" y="575" width="520" height="58" rx="18" fill="#059669" opacity="0.11"/>
+<rect x="2910" y="575" width="8" height="245" rx="4" fill="#059669"/>
+<text x="2934" y="614" font-size="25" font-weight="750" fill="#059669" text-anchor="start">N20 Gearmotors + Tracks</text>
+<text x="2934" y="657" font-size="21" font-weight="400" fill="#111827">- Waveshare DCGM-N20-12V-EN-200RPM</text>
+<text x="2934" y="687" font-size="21" font-weight="400" fill="#111827">- Gear ratio: 1:150, output approx 7 rpm</text>
+<text x="2934" y="717" font-size="21" font-weight="400" fill="#111827">- Motor wires to Motoron M1/M2</text>
+<text x="2934" y="747" font-size="21" font-weight="400" fill="#111827">- Encoder VCC to 3.3 V, GND common</text>
+<rect x="2910" y="850" width="520" height="245" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="2910" y="850" width="520" height="58" rx="18" fill="#059669" opacity="0.11"/>
+<rect x="2910" y="850" width="8" height="245" rx="4" fill="#059669"/>
+<text x="2934" y="889" font-size="25" font-weight="750" fill="#059669" text-anchor="start">Seed Servo</text>
+<text x="2934" y="932" font-size="21" font-weight="400" fill="#111827">- DS-R005 300 deg positional servo</text>
+<text x="2934" y="962" font-size="21" font-weight="400" fill="#111827">- Signal: D33</text>
+<text x="2934" y="992" font-size="21" font-weight="400" fill="#111827">- External regulated 5 V supply + common</text>
+<text x="2934" y="1022" font-size="21" font-weight="400" fill="#111827">  GND</text>
+<text x="2934" y="1052" font-size="21" font-weight="400" fill="#111827">- Startup reset to 0 deg; each seed drop</text>
+<text x="2934" y="1082" font-size="21" font-weight="400" fill="#111827">  advances 60 deg</text>
+<rect x="2910" y="1125" width="520" height="245" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="2910" y="1125" width="520" height="58" rx="18" fill="#059669" opacity="0.11"/>
+<rect x="2910" y="1125" width="8" height="245" rx="4" fill="#059669"/>
+<text x="2934" y="1164" font-size="25" font-weight="750" fill="#059669" text-anchor="start">Modulino Pixels Status LED</text>
+<text x="2934" y="1207" font-size="21" font-weight="400" fill="#111827">- I2C Wire bus: address 0x36</text>
+<text x="2934" y="1237" font-size="21" font-weight="400" fill="#111827">- Normal: steady red</text>
+<text x="2934" y="1267" font-size="21" font-weight="400" fill="#111827">- Stopped / rescue waiting: blinking red</text>
+<text x="2934" y="1297" font-size="21" font-weight="400" fill="#111827">- Revival success: green for 5-10 seconds,</text>
+<text x="2934" y="1327" font-size="21" font-weight="400" fill="#111827">  then back to red</text>
+<rect x="2910" y="1400" width="520" height="245" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="2910" y="1400" width="520" height="58" rx="18" fill="#059669" opacity="0.11"/>
+<rect x="2910" y="1400" width="8" height="245" rx="4" fill="#059669"/>
+<text x="2934" y="1439" font-size="25" font-weight="750" fill="#059669" text-anchor="start">Serial Monitor Debug Output</text>
+<text x="2934" y="1482" font-size="21" font-weight="400" fill="#111827">- 115200 baud</text>
+<text x="2934" y="1512" font-size="21" font-weight="400" fill="#111827">- Prints mode, QTR raw/norm,</text>
+<text x="2934" y="1542" font-size="21" font-weight="400" fill="#111827">  active/inactive count</text>
+<text x="2934" y="1572" font-size="21" font-weight="400" fill="#111827">- Prints RFID UID, encoder counts, yaw,</text>
+<text x="2934" y="1602" font-size="21" font-weight="400" fill="#111827">  turn error, motor commands</text>
+<text x="2934" y="1632" font-size="21" font-weight="400" fill="#111827">- Allows live tuning commands without</text>
+<text x="2934" y="1662" font-size="21" font-weight="400" fill="#111827">  recompiling</text>
+<rect x="2910" y="1675" width="520" height="275" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="2910" y="1675" width="520" height="58" rx="18" fill="#059669" opacity="0.11"/>
+<rect x="2910" y="1675" width="8" height="275" rx="4" fill="#059669"/>
+<text x="2934" y="1714" font-size="25" font-weight="750" fill="#059669" text-anchor="start">Server Output / Reports</text>
+<text x="2934" y="1757" font-size="21" font-weight="400" fill="#111827">- Register robot name and team ID through</text>
+<text x="2934" y="1787" font-size="21" font-weight="400" fill="#111827">  WiFi</text>
+<text x="2934" y="1817" font-size="21" font-weight="400" fill="#111827">- Query 81-hole map states at startup or</text>
+<text x="2934" y="1847" font-size="21" font-weight="400" fill="#111827">  during run</text>
+<text x="2934" y="1877" font-size="21" font-weight="400" fill="#111827">- Report planted nodes after successful</text>
+<text x="2934" y="1907" font-size="21" font-weight="400" fill="#111827">  seed drop</text>
+<text x="2934" y="1937" font-size="21" font-weight="400" fill="#111827">- Send/receive rescue and emergency-return</text>
+<text x="2934" y="1967" font-size="21" font-weight="400" fill="#111827">  information when teacher API is available</text>
+<line x1="710" y1="405" x2="760" y2="420" stroke="#2563eb" stroke-width="4" marker-end="url(#arrow)"/>
+<rect x="575.0" y="388.5" width="320" height="36" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1" opacity="1"/>
+<text x="735.0" y="421.5" font-size="18" font-weight="750" fill="#2563eb" text-anchor="middle">raw sensor data</text>
+<line x1="710" y1="645" x2="760" y2="940" stroke="#2563eb" stroke-width="4" marker-end="url(#arrow)"/>
+<line x1="710" y1="885" x2="760" y2="1510" stroke="#2563eb" stroke-width="4" marker-end="url(#arrow)"/>
+<line x1="710" y1="1135" x2="760" y2="1235" stroke="#2563eb" stroke-width="4" marker-end="url(#arrow)"/>
+<line x1="710" y1="1405" x2="760" y2="1775" stroke="#2563eb" stroke-width="4" marker-end="url(#arrow)"/>
+<line x1="710" y1="1970" x2="760" y2="2050" stroke="#2563eb" stroke-width="4" marker-end="url(#arrow)"/>
+<line x1="1380" y1="420" x2="1450" y2="745" stroke="#0f766e" stroke-width="4" marker-end="url(#arrow)"/>
+<rect x="1255.0" y="558.5" width="320" height="36" rx="8" fill="#ffffff" stroke="#0f766e" stroke-width="1" opacity="1"/>
+<text x="1415.0" y="591.5" font-size="18" font-weight="750" fill="#0f766e" text-anchor="middle">processed state</text>
+<line x1="1380" y1="690" x2="1450" y2="1350" stroke="#0f766e" stroke-width="4" marker-end="url(#arrow)"/>
+<line x1="1380" y1="940" x2="1450" y2="1050" stroke="#0f766e" stroke-width="4" marker-end="url(#arrow)"/>
+<line x1="1380" y1="1235" x2="1450" y2="745" stroke="#0f766e" stroke-width="4" marker-end="url(#arrow)"/>
+<line x1="1380" y1="1510" x2="1450" y2="745" stroke="#0f766e" stroke-width="4" marker-end="url(#arrow)"/>
+<line x1="1380" y1="1775" x2="1450" y2="1350" stroke="#0f766e" stroke-width="4" marker-end="url(#arrow)"/>
+<line x1="1380" y1="2050" x2="1450" y2="1950" stroke="#0f766e" stroke-width="4" marker-end="url(#arrow)"/>
+<line x1="2170" y1="445" x2="2240" y2="1550" stroke="#7c3aed" stroke-width="4" marker-end="url(#arrow)"/>
+<rect x="2045.0" y="973.5" width="320" height="36" rx="8" fill="#ffffff" stroke="#7c3aed" stroke-width="1" opacity="1"/>
+<text x="2205.0" y="1006.5" font-size="18" font-weight="750" fill="#7c3aed" text-anchor="middle">strategy</text>
+<line x1="2170" y1="745" x2="2240" y2="420" stroke="#7c3aed" stroke-width="4" marker-end="url(#arrow)"/>
+<line x1="2170" y1="745" x2="2240" y2="700" stroke="#7c3aed" stroke-width="4" marker-end="url(#arrow)"/>
+<line x1="2170" y1="745" x2="2240" y2="970" stroke="#7c3aed" stroke-width="4" marker-end="url(#arrow)"/>
+<line x1="2170" y1="1350" x2="2240" y2="1265" stroke="#7c3aed" stroke-width="4" marker-end="url(#arrow)"/>
+<line x1="2170" y1="1950" x2="2240" y2="1875" stroke="#7c3aed" stroke-width="4" marker-end="url(#arrow)"/>
+<line x1="2840" y1="420" x2="2910" y2="420" stroke="#d97706" stroke-width="4" marker-end="url(#arrow)"/>
+<rect x="2715.0" y="396.0" width="320" height="36" rx="8" fill="#ffffff" stroke="#d97706" stroke-width="1" opacity="1"/>
+<text x="2875.0" y="429.0" font-size="18" font-weight="750" fill="#d97706" text-anchor="middle">speed commands</text>
+<line x1="2840" y1="700" x2="2910" y2="420" stroke="#d97706" stroke-width="4" marker-end="url(#arrow)"/>
+<line x1="2840" y1="970" x2="2910" y2="420" stroke="#d97706" stroke-width="4" marker-end="url(#arrow)"/>
+<line x1="2840" y1="1030" x2="2910" y2="970" stroke="#d97706" stroke-width="4" marker-end="url(#arrow)"/>
+<rect x="2715.0" y="976.0" width="320" height="36" rx="8" fill="#ffffff" stroke="#d97706" stroke-width="1" opacity="1"/>
+<text x="2875.0" y="1009.0" font-size="18" font-weight="750" fill="#d97706" text-anchor="middle">seed drop</text>
+<line x1="2840" y1="1875" x2="2910" y2="1250" stroke="#dc2626" stroke-width="4" marker-end="url(#arrow)"/>
+<rect x="2715.0" y="1538.5" width="320" height="36" rx="8" fill="#ffffff" stroke="#dc2626" stroke-width="1" opacity="1"/>
+<text x="2875.0" y="1571.5" font-size="18" font-weight="750" fill="#dc2626" text-anchor="middle">status</text>
+<rect x="70" y="2260" width="1060" height="64" rx="16" fill="#ffffff" stroke="#d1d5db" stroke-width="2" opacity="1"/>
+<rect x="70" y="2260" width="1060" height="64" rx="16" fill="#111827" opacity="0.13"/>
+<text x="600.0" y="2302" font-size="28" font-weight="850" fill="#111827" text-anchor="middle">Runtime Strategy Summary</text>
+<rect x="70" y="2345" width="1060" height="430" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="70" y="2345" width="1060" height="58" rx="18" fill="#111827" opacity="0.11"/>
+<rect x="70" y="2345" width="8" height="430" rx="4" fill="#111827"/>
+<text x="94" y="2384" font-size="25" font-weight="750" fill="#111827" text-anchor="start">How the Robot Chooses What to Do</text>
+<text x="94" y="2427" font-size="21" font-weight="400" fill="#111827">- Marked solid grid: QTR line sensor is primary. Follow line using line PID while RFID tags</text>
+<text x="94" y="2457" font-size="21" font-weight="400" fill="#111827">  define nodes.</text>
+<text x="94" y="2487" font-size="21" font-weight="400" fill="#111827">- No-line / open-field: if 8 or more QTR detectors do not see black, stop trusting QTR.</text>
+<text x="94" y="2517" font-size="21" font-weight="400" fill="#111827">- In solid-grid trial, line-loss falls back to encoder-balanced straight drive; in open-</text>
+<text x="94" y="2547" font-size="21" font-weight="400" fill="#111827">  field tasks it switches to sonar wall following or dead reckoning.</text>
+<text x="94" y="2577" font-size="21" font-weight="400" fill="#111827">- Simple and medium demos intentionally avoid full dynamic obstacle handling so the</text>
+<text x="94" y="2607" font-size="21" font-weight="400" fill="#111827">  behavior is repeatable for marking.</text>
+<text x="94" y="2637" font-size="21" font-weight="400" fill="#111827">- Full navigation uses server map + BFS. Obstacles are only added to the robot map after</text>
+<text x="94" y="2667" font-size="21" font-weight="400" fill="#111827">  front sonar confirms they remain after a waiting period.</text>
+<text x="94" y="2697" font-size="21" font-weight="400" fill="#111827">- Replanning is limited to important events: rescue request, confirmed obstacle, emergency</text>
+<text x="94" y="2727" font-size="21" font-weight="400" fill="#111827">  return, or selected target seed status changed.</text>
+<rect x="1210" y="2260" width="1030" height="64" rx="16" fill="#ffffff" stroke="#d1d5db" stroke-width="2" opacity="1"/>
+<rect x="1210" y="2260" width="1030" height="64" rx="16" fill="#111827" opacity="0.13"/>
+<text x="1725.0" y="2302" font-size="28" font-weight="850" fill="#111827" text-anchor="middle">Planting and Node Handling</text>
+<rect x="1210" y="2345" width="1030" height="430" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="1210" y="2345" width="1030" height="58" rx="18" fill="#111827" opacity="0.11"/>
+<rect x="1210" y="2345" width="8" height="430" rx="4" fill="#111827"/>
+<text x="1234" y="2384" font-size="25" font-weight="750" fill="#111827" text-anchor="start">RFID-to-Seed Flow</text>
+<text x="1234" y="2427" font-size="21" font-weight="400" fill="#111827">- RFID tag is detected at a grid node or hole approach point.</text>
+<text x="1234" y="2457" font-size="21" font-weight="400" fill="#111827">- Trial run 2: immediately drive kPlantingOffsetMm and plant until 5 seeds are</text>
+<text x="1234" y="2487" font-size="21" font-weight="400" fill="#111827">  completed.</text>
+<text x="1234" y="2517" font-size="21" font-weight="400" fill="#111827">- Full run: query cached/server state. Only plant if fertilized = true and planted =</text>
+<text x="1234" y="2547" font-size="21" font-weight="400" fill="#111827">  false.</text>
+<text x="1234" y="2577" font-size="21" font-weight="400" fill="#111827">- Drive offset using encoder distance; optional Modulino Distance checks chute-to-hole</text>
+<text x="1234" y="2607" font-size="21" font-weight="400" fill="#111827">  alignment.</text>
+<text x="1234" y="2637" font-size="21" font-weight="400" fill="#111827">- Servo advances 60 deg to release one seed.</text>
+<text x="1234" y="2667" font-size="21" font-weight="400" fill="#111827">- Robot records LDR brightness and reports planted to server when the API command is</text>
+<text x="1234" y="2697" font-size="21" font-weight="400" fill="#111827">  available.</text>
+<rect x="2320" y="2260" width="1110" height="64" rx="16" fill="#ffffff" stroke="#d1d5db" stroke-width="2" opacity="1"/>
+<rect x="2320" y="2260" width="1110" height="64" rx="16" fill="#111827" opacity="0.13"/>
+<text x="2875.0" y="2302" font-size="28" font-weight="850" fill="#111827" text-anchor="middle">Safety and Debug Priority</text>
+<rect x="2320" y="2345" width="1110" height="430" rx="18" fill="white" stroke="#cbd5e1" stroke-width="2" opacity="1"/>
+<rect x="2320" y="2345" width="1110" height="58" rx="18" fill="#111827" opacity="0.11"/>
+<rect x="2320" y="2345" width="8" height="430" rx="4" fill="#111827"/>
+<text x="2344" y="2384" font-size="25" font-weight="750" fill="#111827" text-anchor="start">What Overrides the Mission</text>
+<text x="2344" y="2427" font-size="21" font-weight="400" fill="#111827">- Mechanical kill D32 has highest local priority. First press/release stops; second</text>
+<text x="2344" y="2457" font-size="21" font-weight="400" fill="#111827">  press/release resets, recalibrates IMU, and restarts the route.</text>
+<text x="2344" y="2487" font-size="21" font-weight="400" fill="#111827">- WiFi teacher kill can pause the robot through MiniMessenger. In final logic, re-enable can</text>
+<text x="2344" y="2517" font-size="21" font-weight="400" fill="#111827">  trigger emergency return instead of simply continuing.</text>
+<text x="2344" y="2547" font-size="21" font-weight="400" fill="#111827">- Long operations such as servo hold, distance drive, pause, and IMU turn all check</text>
+<text x="2344" y="2577" font-size="21" font-weight="400" fill="#111827">  missionAbortRequested().</text>
+<text x="2344" y="2607" font-size="21" font-weight="400" fill="#111827">- Serial Monitor shows mode, active/inactive QTR count, encoder correction, yaw, target yaw,</text>
+<text x="2344" y="2637" font-size="21" font-weight="400" fill="#111827">  UID, seed count, and state so failures can be diagnosed live.</text>
+<polyline points="1700,185 1700,250 1810,250 1810,600" fill="none" stroke="#dc2626" stroke-width="5" marker-end="url(#arrow)" stroke-dasharray="12 10"/>
+<rect x="1660" y="226" width="300" height="36" rx="8" fill="#ffffff" stroke="#dc2626" stroke-width="1" opacity="1"/>
+<text x="1810" y="259" font-size="18" font-weight="750" fill="#dc2626" text-anchor="middle">safety override</text>
+<text x="1740" y="240" font-size="21" font-weight="800" fill="#dc2626" text-anchor="start">Kill / WiFi stop can interrupt any state</text>
+<rect x="70" y="2960" width="3460" height="65" rx="18" fill="#ffffff" stroke="#d1d5db" stroke-width="2" opacity="1"/>
+<text x="105" y="3002" font-size="22" font-weight="800" fill="#111827" text-anchor="start">Legend:</text>
+<text x="200" y="3002" font-size="21" font-weight="600" fill="#4b5563" text-anchor="start">Blue = hardware inputs   Teal = signal processing   Purple = mission logic   Orange = control algorithms   Green = actuators / outputs   Red dashed = safety override</text>
+<text x="3500" y="3002" font-size="19" font-weight="600" fill="#6b7280" text-anchor="end">Generated as vector SVG: text remains selectable and crisp on GitHub</text>
+</svg>
