@@ -5,6 +5,7 @@
 #include <Adafruit_ICM20X.h>
 #include <Adafruit_ICM20948.h>
 #include <Adafruit_Sensor.h>
+#include <Arduino_Modulino.h>
 
 #if __has_include("secrets.h")
 #define HAS_TUNNEL_WIFI_SECRETS 1
@@ -50,6 +51,7 @@
 //   Left encoder      -> D34/D35
 //   Right encoder     -> D36/D37
 //   Kill button       -> D32 to GND, INPUT_PULLUP
+//   Modulino Pixels   -> Wire / D20 SDA-D21 SCL, address 0x36
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -70,14 +72,15 @@ constexpr uint8_t kRouteTurnCount = 4;  // Four committed route turns from start
 
 // Distance to roll forward after a line event before making a 90 degree turn.
 // Tune these for the sensor-to-wheel-axis geometry on your robot.
-constexpr float kFirstTAdvanceMm = 70.0f;  // Distance to drive after detecting the first T before turning.
-constexpr float kSharpTurnAdvanceMm = 70.0f;  // Distance to drive after later hard-turn events before turning.
+constexpr float kFirstTAdvanceMm = 60.0f;  // Distance to drive after detecting the first T before turning.
+constexpr float kSharpTurnAdvanceMm = 60.0f;  // Distance to drive after later hard-turn events before turning.
 constexpr int kRouteAdvanceSpeed = 300;  // Motor speed used for the short pre-turn advance.
 
 // After the first outside RFID is detected, drive this extra distance so the
 // robot center is over the spot. Keep 0 if the RFID reader is already centered.
 constexpr float kDefaultRfidAlignOffsetMm = 0.0f;  // Extra distance after first outside RFID detection for centering.
 constexpr uint32_t kStopOverAirlockTagMs = 800;  // Brief stop after reading the base-exit RFID tag.
+constexpr uint8_t kAirlockRfidCheckFromTurnIndex = 2;  // Start checking base-exit RFID after this many route turns.
 
 // Door detection with front sonar. Closed uses the low threshold; open uses
 // the high threshold to provide hysteresis and avoid flickering.
@@ -224,9 +227,14 @@ constexpr uint8_t kKillPin = 32;  // Start/stop button pin, active LOW with INPU
 constexpr uint32_t kKillDebounceMs = 35;  // Button debounce time before accepting a press event.
 
 #if USE_WIFI_AIRLOCK_REQUEST
-constexpr const char *kBoardId = "Team2Robot";  // Board ID used in register/openAirlock messages.
+constexpr const char *kBoardId = "YU7GT";  // Board ID used in register/openAirlock messages.
 constexpr uint32_t kRegisterIntervalMs = 5000;  // Interval between register messages to stay online.
 #endif
+constexpr uint32_t kAirlockRequestRetryMs = 1000;  // Retry pending airlock request while WiFi/MQTT reconnects.
+constexpr bool kRequireWifiBeforeCalibration = true;  // Wait for MiniMessenger before IMU calibration and motion.
+constexpr uint32_t kWifiConnectTimeoutMs = 0;  // 0 = wait forever; nonzero aborts startup after this many ms.
+constexpr uint32_t kWifiConnectPrintIntervalMs = 1000;  // Waiting-for-WiFi status print interval.
+constexpr uint8_t kPixelBrightness = 70;  // Modulino Pixels brightness percent, 0..100.
 
 constexpr float kPi = 3.1415926f;  // Pi constant for geometry calculations.
 constexpr float kRadToDeg = 57.2957795f;  // Conversion factor from radians to degrees.
@@ -289,6 +297,7 @@ struct DoorReading {
 MotoronI2C motoron(kMotoronAddress);
 MFRC522_I2C rfid(kRfidAddress, kRfidResetPin, &Wire);
 Adafruit_ICM20948 imu;
+ModulinoPixels pixels;
 
 #if USE_WIFI_AIRLOCK_REQUEST
 MiniMessenger messenger;
@@ -316,6 +325,19 @@ bool missionSensorsInitialized = false;
 bool airlockRequestSent = false;
 bool airlockAccepted = false;
 bool encoderInterruptsAttached = false;
+bool wifiSafetyEnabled = true;
+bool stoppedByWifiKill = false;
+bool pixelsOk = false;
+String pendingAirlockUid;
+uint32_t lastAirlockRequestAttemptMs = 0;
+
+enum class PixelMode {
+  Unknown,
+  NormalBlue,
+  RunningPurple
+};
+
+PixelMode currentPixelMode = PixelMode::Unknown;
 
 bool lastKillReading = HIGH;
 bool stableKillReading = HIGH;
@@ -642,6 +664,54 @@ void resetDoorCounters() {
 }
 
 /**
+ * Set all eight Modulino Pixels to one color.
+ *
+ * @param color Modulino color constant.
+ * @param mode Logical mode used to avoid redundant I2C writes.
+ */
+void setAllPixels(ModulinoColor color, PixelMode mode) {
+  if (!pixelsOk) return;
+  if (currentPixelMode == mode) return;
+
+  for (uint8_t i = 0; i < 8; i++) {
+    pixels.set(i, color, kPixelBrightness);
+  }
+  pixels.show();
+  currentPixelMode = mode;
+}
+
+/**
+ * Blue means the robot is normal but not actively executing the base-exit run.
+ */
+void setPixelsNormalBlue() {
+  setAllPixels(BLUE, PixelMode::NormalBlue);
+}
+
+/**
+ * Purple/Violet means the robot is starting, calibrating, or actively running.
+ */
+void setPixelsRunningPurple() {
+  setAllPixels(VIOLET, PixelMode::RunningPurple);
+}
+
+/**
+ * Keep the Modulino Pixels synchronized with mission state.
+ *
+ * Idle/Stopped/Done are blue. All active run states are purple.
+ *
+ * @param state Current mission state.
+ */
+void updatePixelsForState(MissionState state) {
+  if (state == MissionState::Idle ||
+      state == MissionState::Stopped ||
+      state == MissionState::Done) {
+    setPixelsNormalBlue();
+  } else {
+    setPixelsRunningPurple();
+  }
+}
+
+/**
  * Change mission state and record the transition time.
  *
  * @param newState State to enter immediately.
@@ -650,6 +720,7 @@ void setState(MissionState newState) {
   missionState = newState;
   stateStartMs = millis();
   resetDoorCounters();
+  updatePixelsForState(newState);
   if (newState == MissionState::FollowLineToTunnelEntry) {
     tunnelEntryNoLineCount = 0;
   }
@@ -802,12 +873,26 @@ void printSettings() {
   Serial.print(routeTurnIndex);
   Serial.print(F("/"));
   Serial.print(kRouteTurnCount);
+  Serial.print(F(" airlockRfidFromTurn="));
+  Serial.print(kAirlockRfidCheckFromTurnIndex);
   Serial.print(F(" wall="));
   Serial.print(sideName(wallSide));
   Serial.print(F(" alignMm="));
   Serial.print(rfidAlignOffsetMm, 1);
   Serial.print(F(" lastUid="));
   Serial.print(lastUid.length() > 0 ? lastUid : String("none"));
+  Serial.print(F(" wifiConnected="));
+#if USE_WIFI_AIRLOCK_REQUEST
+  Serial.print(messenger.isConnected() ? F("YES") : F("NO"));
+#else
+  Serial.print(F("DISABLED"));
+#endif
+  Serial.print(F(" wifiSafety="));
+  Serial.print(wifiSafetyEnabled ? F("ENABLED") : F("DISABLED"));
+  Serial.print(F(" pendingAirlock="));
+  Serial.print(pendingAirlockUid.length() > 0 ? pendingAirlockUid : String("none"));
+  Serial.print(F(" pixels="));
+  Serial.print(pixelsOk ? F("OK") : F("NOT_FOUND"));
   Serial.print(F(" stopped="));
   Serial.println(serialStopped ? F("YES") : F("NO"));
 }
@@ -816,9 +901,21 @@ void printSettings() {
  * Reset all mission progress and start again from the base line.
  */
 void restartMission() {
+  if (!wifiSafetyEnabled) {
+    serialStopped = true;
+    stopMotors();
+    setState(MissionState::Stopped);
+    Serial.println(F("[WIFI SAFETY] start blocked because server safety is disabled. Wait for enable=1."));
+    return;
+  }
+
   serialStopped = false;
+  stoppedByWifiKill = false;
+  setPixelsRunningPurple();
   airlockRequestSent = false;
   airlockAccepted = false;
+  pendingAirlockUid = "";
+  lastAirlockRequestAttemptMs = 0;
   routeTurnIndex = 0;
   eventStableCount = 0;
   tunnelEntryNoLineCount = 0;
@@ -1755,6 +1852,38 @@ bool pollRfidBurst(String *uidOut, uint8_t attempts, uint16_t gapMs) {
 
 #if USE_WIFI_AIRLOCK_REQUEST
 /**
+ * Stop the robot because the server-side WiFi safety state is disabled.
+ *
+ * @param reason Human-readable reason printed to Serial.
+ */
+void stopForWifiSafety(const __FlashStringHelper *reason) {
+  wifiSafetyEnabled = false;
+  stoppedByWifiKill = true;
+  serialStopped = true;
+  stopMotors();
+  setState(MissionState::Stopped);
+  Serial.print(F("[WIFI SAFETY] "));
+  Serial.println(reason);
+}
+
+/**
+ * Re-enable motion after the server sends enable=1.
+ *
+ * The mission is not resumed in the middle of a route segment; press D32 or
+ * send "start" to restart from the beginning after server safety is enabled.
+ */
+void allowWifiSafety() {
+  wifiSafetyEnabled = true;
+  if (stoppedByWifiKill) {
+    stoppedByWifiKill = false;
+    serialStopped = false;
+    Serial.println(F("[WIFI SAFETY] enable=1 received. Press D32 or send start/restart to run again."));
+  } else {
+    Serial.println(F("[WIFI SAFETY] enable=1 received."));
+  }
+}
+
+/**
  * Handle server messages from MiniMessenger.
  *
  * The official MiniMessenger protocol uses text key=value messages for normal
@@ -1770,10 +1899,7 @@ void onWifiMessage(const MessageMetadata& metadata, const uint8_t* payload, size
   if (length == 6) {
     const bool emergency = payload[4] == 1;
     if (emergency) {
-      serialStopped = true;
-      stopMotors();
-      setState(MissionState::Stopped);
-      Serial.println(F("[WIFI] team emergency byte set; stopped."));
+      stopForWifiSafety(F("team emergency byte set; stopped."));
     }
     return;
   }
@@ -1786,19 +1912,18 @@ void onWifiMessage(const MessageMetadata& metadata, const uint8_t* payload, size
   Serial.print(F("[WIFI RX] "));
   Serial.println(msg);
 
-  if (strstr(msg, "type=heartbeat") && strstr(msg, "enable=0")) {
-    serialStopped = true;
-    stopMotors();
-    setState(MissionState::Stopped);
-    Serial.println(F("[WIFI] heartbeat enable=0; stopped."));
+  if (strstr(msg, "enable=1") || strstr(msg, "type=enable")) {
+    allowWifiSafety();
+    return;
+  }
+
+  if (strstr(msg, "enable=0")) {
+    stopForWifiSafety(F("enable=0; stopped."));
     return;
   }
 
   if (strstr(msg, "type=disable") || strstr(msg, "type=emergency")) {
-    serialStopped = true;
-    stopMotors();
-    setState(MissionState::Stopped);
-    Serial.println(F("[WIFI] disable/emergency text message; stopped."));
+    stopForWifiSafety(F("disable/emergency text message; stopped."));
     return;
   }
 
@@ -1840,6 +1965,61 @@ void updateWifi() {
 }
 
 /**
+ * Wait for MiniMessenger to connect before calibration and motion.
+ *
+ * @return true when connected and server safety is enabled; false if cancelled.
+ */
+bool waitForWifiBeforeCalibration() {
+  if (!kRequireWifiBeforeCalibration) {
+    return true;
+  }
+
+  Serial.println(F("[WIFI] waiting for MiniMessenger connection before IMU calibration and motion."));
+  const uint32_t start = millis();
+  uint32_t lastPrintMs = 0;
+
+  while (!messenger.isConnected()) {
+    handleSerialCommands();
+    messenger.loop();
+
+    if (serialStopped || !wifiSafetyEnabled) {
+      stopMotors();
+      Serial.println(F("[WIFI] startup wait cancelled by stop/safety state."));
+      return false;
+    }
+
+    if (killButtonPressedEvent()) {
+      serialStopped = true;
+      stopMotors();
+      setState(MissionState::Stopped);
+      Serial.println(F("[WIFI] startup wait cancelled by D32 button."));
+      return false;
+    }
+
+    if (kWifiConnectTimeoutMs > 0 && millis() - start >= kWifiConnectTimeoutMs) {
+      serialStopped = true;
+      stopMotors();
+      setState(MissionState::Stopped);
+      Serial.println(F("[WIFI] connection timeout before calibration; startup aborted."));
+      return false;
+    }
+
+    if (millis() - lastPrintMs >= kWifiConnectPrintIntervalMs) {
+      lastPrintMs = millis();
+      Serial.print(F("[WIFI] waiting... board_id="));
+      Serial.print(kBoardId);
+      Serial.print(F(" group="));
+      Serial.println(GROUP_ID);
+    }
+    delay(20);
+  }
+
+  updateWifi();
+  Serial.println(F("[WIFI] connected and registered before calibration."));
+  return wifiSafetyEnabled;
+}
+
+/**
  * Request the server to open exit airlock A.
  *
  * MiniMessenger README documents the payload as key=value text, including
@@ -1858,7 +2038,8 @@ bool sendAirlockOpenRequest(const String &uid) {
   snprintf(
       msg,
       sizeof(msg),
-      "type=openAirlock airlock=A tag_id=%s board_id=%s",
+      "type=openAirlock team_id=%s airlock=A tag_id=%s board_id=%s",
+      GROUP_ID,
       uid.c_str(),
       kBoardId);
 
@@ -1881,18 +2062,66 @@ void initializeWifi() {}
 void updateWifi() {}
 
 /**
+ * Abort startup when WiFi is required but secrets.h is not available.
+ *
+ * @return true only when WiFi is not required.
+ */
+bool waitForWifiBeforeCalibration() {
+  if (!kRequireWifiBeforeCalibration) {
+    return true;
+  }
+
+  serialStopped = true;
+  stopMotors();
+  setState(MissionState::Stopped);
+  Serial.println(F("[WIFI] required before calibration, but secrets.h is missing. Startup aborted."));
+  return false;
+}
+
+/**
  * Log the airlock request that would be sent if MiniMessenger were enabled.
  *
  * @param uid RFID UID read at the base-exit tag.
  * @return false because no network request was sent.
  */
 bool sendAirlockOpenRequest(const String &uid) {
-  Serial.print(F("[AIRLOCK] WiFi disabled. Would send: type=openAirlock airlock=A tag_id="));
+  Serial.print(F("[AIRLOCK] WiFi disabled. Would send: type=openAirlock team_id=<GROUP_ID> airlock=A tag_id="));
   Serial.print(uid);
   Serial.println(F(" board_id=<kBoardId>. Copy secrets.example.h to secrets.h to enable."));
   return false;
 }
 #endif
+
+/**
+ * Retry a pending base-exit airlock request without needing to see the RFID tag again.
+ *
+ * @return true only when the request has just been sent successfully.
+ */
+bool servicePendingAirlockRequest() {
+  if (airlockRequestSent || pendingAirlockUid.length() == 0) {
+    return false;
+  }
+
+  const uint32_t now = millis();
+  if (lastAirlockRequestAttemptMs != 0 &&
+      now - lastAirlockRequestAttemptMs < kAirlockRequestRetryMs) {
+    return false;
+  }
+
+  lastAirlockRequestAttemptMs = now;
+  Serial.print(F("[AIRLOCK] requesting A for pending tag UID="));
+  Serial.println(pendingAirlockUid);
+
+  if (!sendAirlockOpenRequest(pendingAirlockUid)) {
+    Serial.println(F("[AIRLOCK] request not sent yet; will retry."));
+    return false;
+  }
+
+  airlockRequestSent = true;
+  pendingAirlockUid = "";
+  Serial.println(F("[AIRLOCK] request sent; waiting for openAirlockReply."));
+  return true;
+}
 
 /**
  * Read the base-exit RFID tag once and request airlock A.
@@ -1901,6 +2130,10 @@ bool sendAirlockOpenRequest(const String &uid) {
  */
 bool checkBaseExitRfidAndRequestAirlock() {
   if (airlockRequestSent) return false;
+  if (pendingAirlockUid.length() > 0) {
+    servicePendingAirlockRequest();
+    return false;
+  }
 
   String uid;
   if (!pollRfidBurst(&uid, kBaseExitRfidBurstPolls, kBaseExitRfidBurstGapMs)) return false;
@@ -1910,8 +2143,9 @@ bool checkBaseExitRfidAndRequestAirlock() {
   Serial.print(F("[RFID] base exit tag UID="));
   Serial.println(lastUid);
 
-  airlockRequestSent = true;
-  sendAirlockOpenRequest(lastUid);
+  pendingAirlockUid = lastUid;
+  lastAirlockRequestAttemptMs = 0;
+  servicePendingAirlockRequest();
 
   const uint32_t start = millis();
   while (millis() - start < kStopOverAirlockTagMs) {
@@ -2273,6 +2507,10 @@ bool driveForwardUntilFirstRfid() {
  * Follow the selected scripted base route until all four route turns are complete.
  */
 void updateFollowBaseRoute() {
+  if (routeTurnIndex >= kAirlockRfidCheckFromTurnIndex) {
+    checkBaseExitRfidAndRequestAirlock();
+  }
+
   const LineReading line = readLine();
   if (routeEventReady(line)) {
     if (!performRouteTurn()) {
@@ -2412,6 +2650,7 @@ void updateAlignOverRfid() {
 void updateMission() {
   handleSerialCommands();
   updateWifi();
+  servicePendingAirlockRequest();
 
   if (handleStartStopButtonEvent()) {
     delay(50);
@@ -2473,6 +2712,18 @@ void updateMission() {
 // ---------------------------------------------------------------------------
 
 /**
+ * Initialize the top Modulino Pixels used for mission status.
+ */
+void initializePixels() {
+  Wire.begin();
+  Modulino.begin(Wire);
+  pixelsOk = pixels.begin();
+  Serial.print(F("[LED] Modulino Pixels="));
+  Serial.println(pixelsOk ? F("OK") : F("NOT FOUND"));
+  setPixelsNormalBlue();
+}
+
+/**
  * Initialize sensors and calibrate IMU only after the robot is placed down.
  *
  * The robot may be hand-carried before the start button is pressed, so QTR,
@@ -2516,6 +2767,10 @@ bool initializeMissionSensorsForRun() {
     missionSensorsInitialized = true;
   }
 
+  if (!waitForWifiBeforeCalibration()) {
+    return false;
+  }
+
   resetEncoders();
   resetLineController();
   resetWallController();
@@ -2544,6 +2799,8 @@ void setup() {
     stableKillReading = lastKillReading;
     lastKillChangeMs = millis();
   }
+
+  initializePixels();
 
   Wire1.begin();
   initializeMotoron();
