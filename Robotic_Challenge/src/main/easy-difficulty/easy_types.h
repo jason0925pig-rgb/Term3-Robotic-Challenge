@@ -34,6 +34,7 @@ enum class MovementMode : uint8_t {
 
 enum class MissionState : uint8_t {
   Init,
+  ExitBaseToField,
   AlignToFirstSegment,
   SearchForRFID,
   ReadCurrentCell,
@@ -42,6 +43,7 @@ enum class MissionState : uint8_t {
   PlantSeed,
   AdvanceRouteIndex,
   MoveToNextCell,
+  ExecuteScript,
   Finished,
   Error
 };

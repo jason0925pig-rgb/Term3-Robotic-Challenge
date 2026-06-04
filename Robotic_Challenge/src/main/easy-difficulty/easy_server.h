@@ -2,12 +2,13 @@
 
 #include <Arduino.h>
 #include <MiniMessenger.h>
+#include <ctype.h>
 #include <string.h>
 
 #include "../secrets.h"
 #include "easy_route.h"
 
-constexpr const char *kEasyBoardId = "YU7GT";
+constexpr const char *kEasyBoardId = "Yu7GT";
 constexpr uint32_t kEasyRegisterIntervalMs = 8000;
 constexpr uint32_t kEasyServerReplyTimeoutMs = 900;
 constexpr uint32_t kEasyWifiStatusPrintMs = 2500;
@@ -192,6 +193,30 @@ inline bool queryServerForCellStatus(const char *uid, CellStatus *statusOut) {
   easyWaitingForCellStatus = false;
   Serial.println(F("[SERVER] isFertile reply timeout."));
   return false;
+}
+
+inline bool sendEasyAirlockOpenRequest(const char *uid, char airlock) {
+  airlock = toupper(airlock);
+  if (airlock != 'A' && airlock != 'B') airlock = 'A';
+
+  if (!easyMessengerStarted || !easyMessenger.isConnected()) {
+    Serial.print(F("[AIRLOCK] offline; cannot request airlock "));
+    Serial.print(airlock);
+    Serial.print(F(" for tag_id="));
+    Serial.println(uid);
+    return false;
+  }
+
+  char msg[180];
+  snprintf(msg, sizeof(msg), "type=openAirlock team_id=%s airlock=%c tag_id=%s board_id=%s",
+           GROUP_ID, airlock, uid, kEasyBoardId);
+
+  const bool ok = easyMessenger.sendToBoard("server", msg);
+  Serial.print(F("[AIRLOCK] sent "));
+  Serial.print(msg);
+  Serial.print(F(" ok="));
+  Serial.println(ok ? F("YES") : F("NO"));
+  return ok;
 }
 
 inline void notifyServerSeedPlanted(const char *uid, Cell cell) {

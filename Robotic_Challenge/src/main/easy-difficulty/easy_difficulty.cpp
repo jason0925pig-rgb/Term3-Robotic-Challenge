@@ -57,17 +57,20 @@ void printStartupCheckStatus(const __FlashStringHelper *label, bool ok) {
   Serial.println(ok ? F("OK") : F("CHECK"));
 }
 
-void printEasyRouteStartupCheck() {
-  Serial.println(F("[CHECK] Route"));
-  const bool routeOk = validateEasyRoute(true);
-  Serial.print(F("  start="));
-  printCell(kEasyStartCell);
-  Serial.print(F(" finish="));
-  printCell(kEasyFinishCell);
-  Serial.print(F(" length="));
-  Serial.println(kEasyFixedRouteLength);
-  Serial.println(F("  movement split: x>=6 line-follow, x<=5 straight-drive"));
-  printStartupCheckStatus(F("  route adjacency/UID map"), routeOk);
+void printEasyStrategyStartupCheck() {
+  Serial.println(F("[CHECK] Hard-coded line strategy"));
+  Serial.println(F("  base exit: route A/right, request airlock A, wall-follow tunnel to field line"));
+  Serial.println(F("  enter: find first RFID, center, turn right"));
+  Serial.println(F("  row 1: drive until field end (2), turn left"));
+  Serial.println(F("  row 2: drive 1, turn left, drive 8/end"));
+  Serial.println(F("  row 3: turn right, drive 1, turn right, drive 8/end"));
+  Serial.println(F("  row 4: turn left, drive 1, turn left, drive 8/end"));
+  Serial.println(F("  return: turn left, drive 3, turn left, drive 2, turn right"));
+  Serial.println(F("  per tag: detect RFID, center forward, then poll/plant/turn"));
+  Serial.println(F("  RFID UID drives fertility polling; server coordinates ignored for navigation"));
+  Serial.print(F("  known RFID UID mappings="));
+  Serial.println(kEasyKnownTagCount);
+  printStartupCheckStatus(F("  scripted navigation active"), true);
 }
 
 void printEasyMotorStartupCheck() {
@@ -214,7 +217,7 @@ void printEasyWifiStartupCheck() {
 
 void printEasyStartupChecks() {
   Serial.println(F("=== Startup checks begin ==="));
-  printEasyRouteStartupCheck();
+  printEasyStrategyStartupCheck();
   printEasyMotorStartupCheck();
   printEasyEncoderStartupCheck();
   printEasySafetyStartupCheck();
@@ -231,7 +234,7 @@ void setup() {
   Serial.begin(kSerialBaud);
   delay(1500);
 
-  Serial.println(F("=== Easy Fixed-Route Seed Planting ==="));
+  Serial.println(F("=== Easy Hard-Coded Line Seed Planting ==="));
 
   setupEasyPins();
   Wire.begin();
