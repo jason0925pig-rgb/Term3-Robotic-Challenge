@@ -2,8 +2,21 @@
 
 // ---------------------------------------------------------------------------
 // QTR raw reading test
-// Purpose: print the 9 raw RC timing readings so you can record white/black
-// calibration numbers and reuse them in LineFollow_Test.ino.
+// Purpose:
+//   Print the 9 raw RC timing readings from the QTR-HD-09RC array.
+//   Run this sketch whenever the QTR board, mounting height, or floor/line
+//   material changes. Record the lowest readings seen on white floor as the
+//   saved "white" calibration, and the highest readings seen on black line as
+//   the saved "black" calibration.
+//
+// Latest replacement-sensor calibration used by the main tests:
+//   saved white/min = {98, 82, 82, 82, 86, 94, 105, 121, 142}
+//   saved black/max = {1479, 921, 866, 797, 762, 733, 779, 901, 1177}
+//
+// The line-following code maps raw readings into 0..1000 using:
+//   normalized = (raw - savedMin) * 1000 / (savedMax - savedMin)
+// so these values directly affect whether each detector is classified as
+// "black line" by kLineThreshold.
 // ---------------------------------------------------------------------------
 
 constexpr uint8_t kQtrCtrlOddPin = 2;

@@ -1,0 +1,27 @@
+QTR_Raw_Read_Test output from the replacement line sensor
+=========================================================
+
+Example Serial Monitor output:
+
+raw: 208 87 87 93 98 105 114 130 152
+sessionMin: 98 82 82 82 86 94 105 121 142
+sessionMax: 1479 921 866 797 762 733 779 901 1177
+
+How these values are used:
+
+- sessionMin is treated as the saved white-floor calibration.
+- sessionMax is treated as the saved black-line calibration.
+- The line-following sketches map each raw sensor reading into a 0..1000
+  normalized value using:
+
+    normalized = (raw - savedMin) * 1000 / (savedMax - savedMin)
+
+- After normalization, kLineThreshold decides whether one channel is considered
+  to be over black line. For example, kLineThreshold = 230 means each channel
+  must be at least 23% of the way from the saved white value to the saved black
+  value before it contributes to line position and active sensor count.
+
+Current saved calibration arrays:
+
+constexpr uint16_t kSavedQtrMin[9] = {98, 82, 82, 82, 86, 94, 105, 121, 142};
+constexpr uint16_t kSavedQtrMax[9] = {1479, 921, 866, 797, 762, 733, 779, 901, 1177};

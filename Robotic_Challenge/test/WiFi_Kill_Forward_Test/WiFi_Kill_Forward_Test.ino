@@ -41,8 +41,8 @@ constexpr int kRightMotorSign = 1;
 constexpr bool kUseKillPin = true;
 constexpr uint8_t kKillPin = 32;
 
-// Keep this matching the dashboard board ID that already works for your robot.
-constexpr const char *kBoardId = "Team2Robot";
+// Keep this matching the MiniMessenger dashboard board ID used by the team.
+constexpr const char *kBoardId = "YU7GT";
 constexpr bool kDefaultMotionAllowedBeforeServer = false;
 constexpr bool kScanWifiAtStartup = false;
 constexpr uint32_t kRegisterIntervalMs = 5000;

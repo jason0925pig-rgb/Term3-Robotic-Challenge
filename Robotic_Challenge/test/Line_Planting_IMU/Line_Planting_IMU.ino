@@ -38,7 +38,11 @@
 constexpr uint32_t kSerialBaud = 115200;
 
 // Mission sequence.
-constexpr float kPlantingOffsetMm = 205.0f;     // RFID detect point -> seed drop point.
+// 205 mm is the measured offset from the RFID detection point to the seed
+// outlet/chassis planting centre on the current mechanical build. During this
+// move, line following is deliberately disabled so the hole can be aligned by
+// encoder distance instead of by the line sensor.
+constexpr float kPlantingOffsetMm = 205.0f;
 constexpr float kTurnAfterPlantDeg = 90.0f;     // Positive uses the current IMU left-turn convention.
 constexpr uint8_t kMaxPlantingCycles = 4;       // 4 corners of a square. Set 0 for infinite repeat.
 constexpr uint32_t kPauseAfterRfidMs = 250;
@@ -66,10 +70,12 @@ constexpr uint8_t kIntegralClamp = 120;
 constexpr uint32_t kLinePrintIntervalMs = 160;
 constexpr uint32_t kLoopDelayMs = 8;
 
-// Latest measured raw values from QTR_Raw_Read_Test.
-// For RC QTR sensors, darker surfaces generally produce larger timing values.
-constexpr uint16_t kSavedQtrMin[9] = {82, 82, 82, 82, 82, 82, 82, 82, 93};
-constexpr uint16_t kSavedQtrMax[9] = {420, 336, 308, 301, 293, 316, 331, 341, 464};
+// Latest measured raw values from QTR_Raw_Read_Test after replacing the QTR
+// sensor board. For RC QTR sensors, darker surfaces generally produce larger
+// discharge timing values. These arrays map each channel independently to
+// 0-1000, because each detector has a slightly different optical response.
+constexpr uint16_t kSavedQtrMin[9] = {98, 82, 82, 82, 86, 94, 105, 121, 142};
+constexpr uint16_t kSavedQtrMax[9] = {1479, 921, 866, 797, 762, 733, 779, 901, 1177};
 
 // RFID.
 constexpr uint8_t kRfidAddress = 0x28;

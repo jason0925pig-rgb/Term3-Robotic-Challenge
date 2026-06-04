@@ -4,7 +4,9 @@
 // ---------------------------------------------------------------------------
 // I2C scanner for Arduino GIGA.
 // Wire scans D20/D21. Wire1 scans the shield SDA1/SCL1 bus.
-// Motoron should appear at 0x10 on Wire1 if the shield is plugged into Wire1.
+// Current robot:
+//   Wire  / D20-D21      -> RFID 0x28, VL53L5CX 0x29, Modulino Pixels 0x36, IMU 0x68
+//   Wire1 / shield bus   -> Motoron 0x11, shield helper device 0x60
 // ---------------------------------------------------------------------------
 
 void scanBus(TwoWire &bus, const __FlashStringHelper *name) {
@@ -20,7 +22,8 @@ void scanBus(TwoWire &bus, const __FlashStringHelper *name) {
       Serial.print(F("Found 0x"));
       if (address < 16) Serial.print('0');
       Serial.print(address, HEX);
-      if (address == 0x10) Serial.print(F("  <- Motoron expected address"));
+      if (address == 0x11) Serial.print(F("  <- Motoron M3S550 address used by tests"));
+      if (address == 0x60) Serial.print(F("  <- shield helper address"));
       Serial.println();
       found++;
     } else if (error == 4) {
