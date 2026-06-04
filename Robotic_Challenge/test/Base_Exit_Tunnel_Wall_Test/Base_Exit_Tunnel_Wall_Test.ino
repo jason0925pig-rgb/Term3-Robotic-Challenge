@@ -112,12 +112,13 @@ constexpr int kRfidAlignSpeed = 260;  // Encoder-drive speed for final RFID alig
 // server reports fertile=true and planted=false.
 constexpr uint8_t kWallExitLineStableFrames = 2;  // Consecutive line frames needed to leave wall following.
 constexpr uint8_t kReturnWallExitLineStableFrames = 1;  // Return trip: one QTR line frame immediately resumes line following.
-constexpr float kGridPlantCenterOffsetMm = 75.0f;  // Drive after each grid RFID before querying/planting.
+constexpr float kGridPlantCenterOffsetMm = 90.0f;  // Drive after each grid RFID before querying/planting.
 constexpr int kGridPlantOffsetSpeed = 360;  // Encoder-drive speed for the 75 mm RFID-to-hole offset.
 constexpr bool kPlantIfNoServerReply = false;  // true only for offline bench tests.
 constexpr uint8_t kMaxSeedsToPlant = 5;  // Keep following the route after this, but do not drop more seeds.
 constexpr uint32_t kServerReplyTimeoutMs = 900;  // Time to wait for isFertileReply at each RFID node.
 constexpr uint32_t kGridRfidCooldownMs = 1300;  // Ignore the same UID briefly after it was handled.
+constexpr uint32_t kPostTurnRfidIgnoreMs = 1000;  // Ignore grid RFID reads briefly after each scripted grid turn.
 
 // DS-R005 300 degree positional servo used for seed release.
 constexpr uint8_t kServoPin = 33;  // Servo signal pin.
@@ -152,7 +153,7 @@ constexpr uint32_t kLineLoopDelayMs = 8;  // Delay at end of each line-following
 // events use expected left/right hard-turn evidence.
 constexpr uint8_t kFirstTMinActiveSensors = 8;  // Minimum active sensors to accept the first T/bifurcation.
 constexpr uint8_t kFirstTStableFrames = 5;  // Consecutive first-T frames required before committing the first turn.
-constexpr float kFirstTMinTravelMm = 160.0f;  // Minimum travel from start before the first T can be accepted.
+constexpr float kFirstTMinTravelMm = 80.0f;  // Minimum travel from start before the first T can be accepted.
 constexpr uint16_t kFirstTEdgeStrongThreshold = 650;  // Strong-black threshold required on both outer edges for first T.
 constexpr uint16_t kFirstTMinTotalStrength = 5600;  // Minimum summed 9-sensor black strength for first-T confidence.
 constexpr int kFirstTMaxCenterError = 900;  // Maximum centered line error allowed when accepting the first T.
@@ -370,6 +371,7 @@ ModulinoPixels pixels;
 #if USE_WIFI_AIRLOCK_REQUEST
 MiniMessenger messenger;
 uint32_t lastRegisterMs = 0;
+bool wifiInitialized = false;
 #endif
 
 uint16_t qtrRaw[9] = {};
@@ -426,6 +428,7 @@ int currentServoAngle = kServoMinAngle;
 String lastUid;
 String lastGridUid;
 uint32_t lastGridUidMs = 0;
+uint32_t lastGridTurnMs = 0;
 bool easyDoorRequestSent = false;
 bool waitingForCellStatus = false;
 CellStatus lastCellStatus;
@@ -1105,6 +1108,7 @@ void restartMission() {
   lastUid = "";
   lastGridUid = "";
   lastGridUidMs = 0;
+  lastGridTurnMs = 0;
   lastEventMs = millis();
   resetLineController();
   resetWallController();
@@ -2140,9 +2144,11 @@ void onWifiMessage(const MessageMetadata& metadata, const uint8_t* payload, size
  * Start MiniMessenger WiFi/MQTT communication if secrets.h is available.
  */
 void initializeWifi() {
+  if (wifiInitialized) return;
   messenger.onMessage(onWifiMessage);
   messenger.begin(WIFI_SSID, WIFI_PASSWORD, BROKER_HOST, BROKER_PORT, GROUP_ID, kBoardId);
   lastRegisterMs = 0;
+  wifiInitialized = true;
   Serial.println(F("[WIFI] MiniMessenger started."));
 }
 
@@ -2875,6 +2881,13 @@ bool isDuplicateRecentGridUid(const String &uid) {
 }
 
 /**
+ * @return true while grid RFID reads should be ignored after a scripted turn.
+ */
+bool suppressGridRfidAfterTurn() {
+  return lastGridTurnMs != 0 && millis() - lastGridTurnMs < kPostTurnRfidIgnoreMs;
+}
+
+/**
  * Drive from the RFID reader position to the hole-center position, then query
  * the server and plant if the cell is fertile and unplanted.
  *
@@ -2944,6 +2957,9 @@ bool performEasyTurn(TurnDir dir) {
   const bool ok = turnDegreesImu(degreesForTurn(dir));
   delay(120);
   resetLineController();
+  if (ok) {
+    lastGridTurnMs = millis();
+  }
   return ok;
 }
 
@@ -2990,34 +3006,36 @@ void updateEasyGridRoute() {
     return;
   }
 
-  String uid;
-  if (pollRfid(&uid, true)) {
-    if (handleGridRfidNode(uid)) {
-      easySegmentRfidCount++;
-      const EasyRouteStep step = kEasyRoute[easyRouteIndex];
+  if (!suppressGridRfidAfterTurn()) {
+    String uid;
+    if (pollRfid(&uid, true)) {
+      if (handleGridRfidNode(uid)) {
+        easySegmentRfidCount++;
+        const EasyRouteStep step = kEasyRoute[easyRouteIndex];
 
-      Serial.print(F("[EASY ROUTE] step="));
-      Serial.print(easyRouteIndex + 1);
-      Serial.print(F("/"));
-      Serial.print(kEasyRouteLength);
-      Serial.print(F(" count="));
-      Serial.print(easySegmentRfidCount);
-      Serial.print(F("/"));
-      Serial.println(step.rfidCount);
+        Serial.print(F("[EASY ROUTE] step="));
+        Serial.print(easyRouteIndex + 1);
+        Serial.print(F("/"));
+        Serial.print(kEasyRouteLength);
+        Serial.print(F(" count="));
+        Serial.print(easySegmentRfidCount);
+        Serial.print(F("/"));
+        Serial.println(step.rfidCount);
 
-      if (easySegmentRfidCount >= step.rfidCount) {
-        easySegmentRfidCount = 0;
-        if (!performEasyTurn(step.turnAfter)) {
-          serialStopped = true;
-          setState(MissionState::Stopped);
-          return;
-        }
+        if (easySegmentRfidCount >= step.rfidCount) {
+          easySegmentRfidCount = 0;
+          if (!performEasyTurn(step.turnAfter)) {
+            serialStopped = true;
+            setState(MissionState::Stopped);
+            return;
+          }
 
-        easyRouteIndex++;
-        if (step.requestDoorAfterTurn) {
-          Serial.println(F("[EASY ROUTE] final turn complete; requesting airlock with last RFID UID."));
-          setState(MissionState::EasyDoorRequest);
-          return;
+          easyRouteIndex++;
+          if (step.requestDoorAfterTurn) {
+            Serial.println(F("[EASY ROUTE] final turn complete; requesting airlock with last RFID UID."));
+            setState(MissionState::EasyDoorRequest);
+            return;
+          }
         }
       }
     }
@@ -3462,7 +3480,6 @@ bool initializeMissionSensorsForRun() {
     initializeQtr();
     initializeRfid();
     initializeImuHardware();
-    initializeWifi();
 
     missionSensorsInitialized = true;
   }
@@ -3501,6 +3518,7 @@ void setup() {
   }
 
   initializePixels();
+  initializeWifi();
 
   Wire1.begin();
   initializeMotoron();
