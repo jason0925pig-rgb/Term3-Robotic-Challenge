@@ -11,8 +11,8 @@ constexpr int kEasyServoStepAngle = 60;
 constexpr uint32_t kEasyServoMoveSettleMs = 600;
 constexpr uint32_t kEasyServoHoldAfterDropMs = 1200;
 constexpr uint32_t kEasyServoFrameUs = 20000;
-constexpr float kEasyPlantCenterOffsetMm = 175.0f;
-constexpr int kEasyPlantCenterDriveSpeed = 300;
+constexpr float kEasyPlantCenterOffsetMm = 90.0f;
+constexpr int kEasyPlantCenterDriveSpeed = 360;
 
 static int easyCurrentServoAngle = kEasyServoMinAngle;
 

@@ -8,8 +8,8 @@
 
 constexpr uint8_t kEasyRfidAddress = 0x28;
 constexpr uint8_t kEasyRfidResetPin = 39;
-constexpr uint32_t kEasyRfidPollIntervalMs = 80;
-constexpr uint32_t kEasySameRfidCooldownMs = 900;
+constexpr uint32_t kEasyRfidPollIntervalMs = 20;
+constexpr uint32_t kEasySameRfidCooldownMs = 1300;
 constexpr uint32_t kEasyReadCurrentRfidTimeoutMs = 900;
 
 static MFRC522_I2C easyRfid(kEasyRfidAddress, kEasyRfidResetPin, &Wire);

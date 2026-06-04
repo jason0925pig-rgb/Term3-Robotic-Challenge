@@ -42,20 +42,20 @@ constexpr uint16_t kSavedQtrMin[9] = {82, 82, 82, 82, 82, 82, 82, 82, 93};
 constexpr uint16_t kSavedQtrMax[9] = {420, 336, 308, 301, 293, 316, 331, 341, 464};
 
 constexpr int kLineErrorSign = 1;
-constexpr int kLineBaseSpeed = 400;
-constexpr int kLineMaxCorrection = 600;
-constexpr int kLineHardTurnSpeed = 500;
-constexpr int kLineSearchTurnSpeed = 220;
+constexpr int kLineBaseSpeed = 340;
+constexpr int kLineMaxCorrection = 560;
+constexpr int kLineHardTurnSpeed = 450;
+constexpr int kLineSearchTurnSpeed = 210;
 constexpr float kLineKp = 0.8f;
 constexpr float kLineKi = 0.0f;
 constexpr float kLineKd = 0.08f;
 constexpr uint16_t kLineThreshold = 230;
 constexpr uint16_t kStrongLineThreshold = 650;
-constexpr int kHardTurnError = 2600;
+constexpr int kHardTurnError = 2500;
 constexpr int kCenterRecoverError = 900;
 constexpr float kLineIntegralClamp = 120.0f;
 constexpr uint32_t kLineLoopDelayMs = 8;
-constexpr uint32_t kLinePrintIntervalMs = 160;
+constexpr uint32_t kLinePrintIntervalMs = 150;
 
 // Ultrasonic sensors.
 constexpr int kLeftTrigPin = 9;
@@ -71,8 +71,8 @@ constexpr float kMaxValidSonarMm = 900.0f;
 constexpr float kObstacleAheadThresholdMm = 160.0f;
 
 constexpr float kTargetWallDistanceMm = 62.5f;
-constexpr int kWallBaseSpeed = 600;
-constexpr int kWallMaxCorrection = 220;
+constexpr int kWallBaseSpeed = 520;
+constexpr int kWallMaxCorrection = 190;
 constexpr float kMaxFastSlowMotorRatio = 1.40f;
 constexpr float kWallKp = 1.0f;
 constexpr float kWallKi = 0.0f;
@@ -87,7 +87,7 @@ constexpr uint16_t kGyroBiasSamples = 500;
 constexpr uint16_t kGyroBiasSampleDelayMs = 4;
 constexpr int kTurnCommandSign = 1;
 constexpr int kImuYawSign = 1;
-constexpr int kTurnMaxSpeed = 600;
+constexpr int kTurnMaxSpeed = 560;
 constexpr int kTurnMinSpeed = 115;
 constexpr float kTurnKp = 500.0f;
 constexpr float kTurnKd = 0.0f;

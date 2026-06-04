@@ -722,129 +722,129 @@ void loop() {
 
   updateLatestSensors();
 
-  switch (test7State) {
-    case Test7State::FollowLine:
-      if (latestSonar.frontValid && latestSonar.frontMm <= obstacleAheadThresholdMm) {
-        stopMotors();
-        originalHeadingDeg = yawDeg;
-        headingOffsetFromOriginalDeg = 0.0f;
-        stopReason = "none";
-        transitionTo(Test7State::PrepareSwerve);
-      } else {
-        applyLineFollowWithoutDelay();
-      }
-      break;
+  // switch (test7State) {
+  //   case Test7State::FollowLine:
+  //     if (latestSonar.frontValid && latestSonar.frontMm <= obstacleAheadThresholdMm) {
+  //       stopMotors();
+  //       originalHeadingDeg = yawDeg;
+  //       headingOffsetFromOriginalDeg = 0.0f;
+  //       stopReason = "none";
+  //       transitionTo(Test7State::PrepareSwerve);
+  //     } else {
+  //       applyLineFollowWithoutDelay();
+  //     }
+  //     break;
 
-    case Test7State::PrepareSwerve:
-      stopMotors();
-      chooseSwerveDirection();
-      Serial.print(F("[SWERVE] direction="));
-      Serial.print(sideName(swerveDirection));
-      Serial.print(F(" obstacleFacing="));
-      Serial.println(sideName(obstacleFacingSide));
-      beginFindAndCenterOnNextRfid(Test7State::TurnAway, false);
-      break;
+  //   case Test7State::PrepareSwerve:
+  //     stopMotors();
+  //     chooseSwerveDirection();
+  //     Serial.print(F("[SWERVE] direction="));
+  //     Serial.print(sideName(swerveDirection));
+  //     Serial.print(F(" obstacleFacing="));
+  //     Serial.println(sideName(obstacleFacingSide));
+  //     beginFindAndCenterOnNextRfid(Test7State::TurnAway, false);
+  //     break;
 
-    case Test7State::FindAlignmentTag:
-      handleAlignmentTagSearch();
-      break;
+  //   case Test7State::FindAlignmentTag:
+  //     handleAlignmentTagSearch();
+  //     break;
 
-    case Test7State::DriveRfidCenterOffset:
-      handleRfidCenterOffsetDrive();
-      break;
+  //   case Test7State::DriveRfidCenterOffset:
+  //     handleRfidCenterOffsetDrive();
+  //     break;
 
-    case Test7State::TurnAway: {
-      const float turnDeg = 90.0f * turnSignForSwerve();
-      if (!turnDegreesImu(turnDeg)) {
-        setSafeStop("turn_away_failed");
-        break;
-      }
-      headingOffsetFromOriginalDeg += turnDeg;
-      updateLatestSensors();
-      referenceObstacleSideMm = sonarDistanceForSide(obstacleFacingSide, latestSonar);
-      if (!sonarValidForSide(obstacleFacingSide, latestSonar)) {
-        referenceObstacleSideMm = -1.0f;
-      }
-      gridSpacesAway = 0;
-      beginFindAndCenterOnNextRfid(Test7State::MoveSidewaysAroundObstacle, true);
-      break;
-    }
+  //   case Test7State::TurnAway: {
+  //     const float turnDeg = 90.0f * turnSignForSwerve();
+  //     if (!turnDegreesImu(turnDeg)) {
+  //       setSafeStop("turn_away_failed");
+  //       break;
+  //     }
+  //     headingOffsetFromOriginalDeg += turnDeg;
+  //     updateLatestSensors();
+  //     referenceObstacleSideMm = sonarDistanceForSide(obstacleFacingSide, latestSonar);
+  //     if (!sonarValidForSide(obstacleFacingSide, latestSonar)) {
+  //       referenceObstacleSideMm = -1.0f;
+  //     }
+  //     gridSpacesAway = 0;
+  //     beginFindAndCenterOnNextRfid(Test7State::MoveSidewaysAroundObstacle, true);
+  //     break;
+  //   }
 
-    case Test7State::MoveSidewaysAroundObstacle:
-      handleRfidLineFollowMovement(
-          &gridSpacesAway,
-          maxSidewaysGridSpaces,
-          Test7State::TurnParallelToOriginal);
-      break;
+  //   case Test7State::MoveSidewaysAroundObstacle:
+  //     handleRfidLineFollowMovement(
+  //         &gridSpacesAway,
+  //         maxSidewaysGridSpaces,
+  //         Test7State::TurnParallelToOriginal);
+  //     break;
 
-    case Test7State::TurnParallelToOriginal: {
-      const float turnDeg = -90.0f * turnSignForSwerve();
-      if (!turnDegreesImu(turnDeg)) {
-        setSafeStop("turn_parallel_failed");
-        break;
-      }
-      headingOffsetFromOriginalDeg += turnDeg;
-      gridSpacesPassing = 0;
-      transitionTo(Test7State::PassObstacle);
-      break;
-    }
+  //   case Test7State::TurnParallelToOriginal: {
+  //     const float turnDeg = -90.0f * turnSignForSwerve();
+  //     if (!turnDegreesImu(turnDeg)) {
+  //       setSafeStop("turn_parallel_failed");
+  //       break;
+  //     }
+  //     headingOffsetFromOriginalDeg += turnDeg;
+  //     gridSpacesPassing = 0;
+  //     transitionTo(Test7State::PassObstacle);
+  //     break;
+  //   }
 
-    case Test7State::PassObstacle:
-      handleRfidLineFollowMovement(
-          &gridSpacesPassing,
-          maxPassingGridSpaces,
-          Test7State::TurnBackTowardLine);
-      break;
+  //   case Test7State::PassObstacle:
+  //     handleRfidLineFollowMovement(
+  //         &gridSpacesPassing,
+  //         maxPassingGridSpaces,
+  //         Test7State::TurnBackTowardLine);
+  //     break;
 
-    case Test7State::TurnBackTowardLine: {
-      const float turnDeg = -90.0f * turnSignForSwerve();
-      if (!turnDegreesImu(turnDeg)) {
-        setSafeStop("turn_back_to_line_failed");
-        break;
-      }
-      headingOffsetFromOriginalDeg += turnDeg;
-      returnGridSpaces = 0;
-      transitionTo(Test7State::ReturnToOriginalLineOffset);
-      break;
-    }
+  //   case Test7State::TurnBackTowardLine: {
+  //     const float turnDeg = -90.0f * turnSignForSwerve();
+  //     if (!turnDegreesImu(turnDeg)) {
+  //       setSafeStop("turn_back_to_line_failed");
+  //       break;
+  //     }
+  //     headingOffsetFromOriginalDeg += turnDeg;
+  //     returnGridSpaces = 0;
+  //     transitionTo(Test7State::ReturnToOriginalLineOffset);
+  //     break;
+  //   }
     
-    case Test7State::ReturnToOriginalLineOffset:
-      handleReturnToLineOffset();
-      break;
+  //   case Test7State::ReturnToOriginalLineOffset:
+  //     handleReturnToLineOffset();
+  //     break;
 
-    case Test7State::RestoreOriginalHeading: {
-      const float restoreTurnDeg = -headingOffsetFromOriginalDeg;
-      if (absFloat(restoreTurnDeg) > kTurnToleranceDeg) {
-        if (!turnDegreesImu(restoreTurnDeg)) {
-          setSafeStop("restore_heading_failed");
-          break;
-        }
-      }
-      headingOffsetFromOriginalDeg = 0.0f;
-      resetLineControllerHistory();
-      postObstacleRfidCount = 0;
-      transitionTo(Test7State::FollowLineAfterObstacle);
-      break;
-    }
+  //   case Test7State::RestoreOriginalHeading: {
+  //     const float restoreTurnDeg = -headingOffsetFromOriginalDeg;
+  //     if (absFloat(restoreTurnDeg) > kTurnToleranceDeg) {
+  //       if (!turnDegreesImu(restoreTurnDeg)) {
+  //         setSafeStop("restore_heading_failed");
+  //         break;
+  //       }
+  //     }
+  //     headingOffsetFromOriginalDeg = 0.0f;
+  //     resetLineControllerHistory();
+  //     postObstacleRfidCount = 0;
+  //     transitionTo(Test7State::FollowLineAfterObstacle);
+  //     break;
+  //   }
 
-    case Test7State::FollowLineAfterObstacle:
-      handlePostObstacleLineFollow();
-      break;
+  //   case Test7State::FollowLineAfterObstacle:
+  //     handlePostObstacleLineFollow();
+  //     break;
 
-    case Test7State::Complete:
-      stopMotors();
-      if (!completeAnnounced) {
-        Serial.println(F("[DONE] Test 7 obstacle manoeuvre complete."));
-        completeAnnounced = true;
-      }
-      break;
+  //   case Test7State::Complete:
+  //     stopMotors();
+  //     if (!completeAnnounced) {
+  //       Serial.println(F("[DONE] Test 7 obstacle manoeuvre complete."));
+  //       completeAnnounced = true;
+  //     }
+  //     break;
 
-    case Test7State::SafeStop:
-      stopMotors();
-      break;
-  }
+  //   case Test7State::SafeStop:
+  //     stopMotors();
+  //     break;
+  // }
 
-  // applyLineFollowStep();
+  applyLineFollowStep();
   // setTank(manoeuvreSpeed, manoeuvreSpeed);
 
   printDebugSnapshot();

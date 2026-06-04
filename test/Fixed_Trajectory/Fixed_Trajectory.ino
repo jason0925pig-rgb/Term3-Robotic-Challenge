@@ -45,8 +45,9 @@
 //     report seedPlanted to the server.
 //   - If emergency return is triggered, route directly to G9 and skip RFID
 //     planting/server checks. RFID may still be used only for localization.
-//   - Front sonar obstacle: stop and confirm. If persistent, reverse to an RFID,
-//     re-center by 7.5 cm, mark the front cell as blocked, and BFS to next goal.
+//   - Front sonar obstacle: stop and confirm. If persistent, run the line-based
+//     swerve-around obstacle strategy. If that cannot complete, fall back to
+//     reverse-to-RFID recovery and BFS.
 //   - Mechanical kill button toggles pause/resume. WiFi disable pauses; once
 //     re-enabled, the robot immediately starts emergency return to G9.
 //   - Normal pixels: solid red. Paused/waiting: blinking red. Rescue success:
@@ -104,6 +105,16 @@ constexpr uint32_t kDriveDistanceTimeoutMs = 10000;
 constexpr float kFrontObstacleThresholdMm = 100.0f;
 constexpr uint32_t kObstacleConfirmMs = 10000;
 constexpr uint32_t kReturnObstacleConfirmMs = 5000;
+constexpr float kAvoidanceFrontSafetyStopMm = 20.0f;
+constexpr float kAvoidanceSameSideDistanceToleranceMm = 35.0f;
+constexpr float kAvoidanceClearedSideDistanceIncreaseMm = 90.0f;
+constexpr float kAvoidanceRfidCenteringOffsetMm = 220.0f;
+constexpr int kAvoidanceManoeuvreSpeed = 260;
+constexpr uint32_t kAvoidanceMovementTimeoutMs = 12000;
+constexpr uint32_t kAvoidanceRfidNodeDebounceMs = 900;
+constexpr uint8_t kAvoidancePostObstacleNodeTarget = 3;
+constexpr uint8_t kAvoidanceMaxSidewaysGridSpaces = 4;
+constexpr uint8_t kAvoidanceMaxPassingGridSpaces = 4;
 
 constexpr uint8_t kMaxSeedsToPlant = 5;
 constexpr bool kPlantIfNoServerReply = false;
@@ -258,6 +269,11 @@ enum class FollowMode : uint8_t {
   Stopped
 };
 
+enum class WallSide : uint8_t {
+  Left,
+  Right
+};
+
 constexpr Cell kStartCell = {3, 9};  // C9
 constexpr Cell kFinishCell = {7, 9}; // G9
 constexpr Heading kInitialHeading = Heading::North;
@@ -380,6 +396,8 @@ uint32_t greenUntilMs = 0;
 uint32_t lastButtonToggleMs = 0;
 uint32_t lastHandledRfidMs = 0;
 char lastHandledUid[12] = "";
+uint32_t lastAvoidanceRfidMs = 0;
+char lastAvoidanceUid[12] = "";
 
 char pendingServerUid[12] = "";
 bool waitingForServerReply = false;
@@ -1518,6 +1536,446 @@ bool nextNavigationCell(Cell *out) {
 // ---------------------------------------------------------------------------
 // Obstacle and RFID-centered recovery
 // ---------------------------------------------------------------------------
+void updateRouteProgressFromCell(Cell cell);
+void handleRfidEvent(const char *uid);
+
+const __FlashStringHelper *wallSideName(WallSide side) {
+  return side == WallSide::Left ? F("LEFT") : F("RIGHT");
+}
+
+void resetLineControllerHistory() {
+  lastLineError = 0;
+  lastSeenLineError = 0;
+  lastLineSeenMs = millis();
+}
+
+void markFrontCellBlocked() {
+  const Cell blocked = stepCell(currentCell, heading);
+  if (validCell(blocked) && !sameCell(blocked, currentCell)) {
+    obstacleGrid[blocked.row][blocked.col] = true;
+    Serial.print(F("[OBSTACLE] marked blocked cell "));
+    printCell(blocked);
+    Serial.println();
+  }
+}
+
+float readSideSonarMm(WallSide side, bool *validOut) {
+  const float mm = side == WallSide::Left
+                       ? readSonarMm(kLeftTrigPin, kLeftEchoPin)
+                       : readSonarMm(kRightTrigPin, kRightEchoPin);
+  const bool valid = sonarReadingValid(mm);
+  if (validOut) *validOut = valid;
+  return valid ? mm : -1.0f;
+}
+
+float turnSignForSwerve(WallSide swerveDirection) {
+  return swerveDirection == WallSide::Left ? 1.0f : -1.0f;
+}
+
+bool obstacleSideCleared(float currentMm, float referenceMm) {
+  if (referenceMm < 0.0f) return false;
+  if (currentMm < 0.0f) return true;
+  return currentMm > referenceMm + kAvoidanceClearedSideDistanceIncreaseMm;
+}
+
+bool obstacleStillBeside(float currentMm, float referenceMm) {
+  if (referenceMm < 0.0f || currentMm < 0.0f) return false;
+  if (absFloat(currentMm - referenceMm) <= kAvoidanceSameSideDistanceToleranceMm) return true;
+  return currentMm <= referenceMm + kAvoidanceClearedSideDistanceIncreaseMm;
+}
+
+void chooseSwerveDirection(WallSide *swerveDirection, WallSide *obstacleFacingSide) {
+  bool leftValid = false;
+  bool rightValid = false;
+  const float leftMm = readSideSonarMm(WallSide::Left, &leftValid);
+  const float rightMm = readSideSonarMm(WallSide::Right, &rightValid);
+
+  if (leftValid && rightValid) {
+    *swerveDirection = leftMm > rightMm ? WallSide::Left : WallSide::Right;
+  } else if (leftValid) {
+    *swerveDirection = WallSide::Left;
+  } else if (rightValid) {
+    *swerveDirection = WallSide::Right;
+  } else {
+    *swerveDirection = WallSide::Left;
+  }
+
+  *obstacleFacingSide = *swerveDirection == WallSide::Left ? WallSide::Right : WallSide::Left;
+
+  Serial.print(F("[SWERVE] direction="));
+  Serial.print(wallSideName(*swerveDirection));
+  Serial.print(F(" obstacleFacing="));
+  Serial.print(wallSideName(*obstacleFacingSide));
+  Serial.print(F(" leftMm="));
+  Serial.print(leftMm, 1);
+  Serial.print(F(" rightMm="));
+  Serial.println(rightMm, 1);
+}
+
+void updateHeadingAfterRelativeTurn(float degrees) {
+  if (absFloat(degrees) < 45.0f) return;
+
+  int headingValue = static_cast<int>(heading);
+  if (absFloat(degrees) >= 135.0f) {
+    headingValue = (headingValue + 2) % 4;
+  } else if (degrees > 0.0f) {
+    headingValue = (headingValue + 3) % 4; // Positive IMU target is a left turn.
+  } else {
+    headingValue = (headingValue + 1) % 4;
+  }
+  heading = static_cast<Heading>(headingValue);
+}
+
+void turnRelativeAndTrackHeading(float degrees, float *headingOffsetFromOriginalDeg) {
+  if (absFloat(degrees) <= kTurnToleranceDeg) return;
+  turnDegreesImu(degrees);
+  updateHeadingAfterRelativeTurn(degrees);
+  *headingOffsetFromOriginalDeg += degrees;
+}
+
+void initializeAvoidanceRfidDebounce() {
+  strncpy(lastAvoidanceUid, lastHandledUid, sizeof(lastAvoidanceUid) - 1);
+  lastAvoidanceUid[sizeof(lastAvoidanceUid) - 1] = '\0';
+  lastAvoidanceRfidMs = millis();
+}
+
+bool pollAvoidanceGridNode(Cell *cellOut, char *uidOut, size_t uidOutSize) {
+  String uid;
+  if (!pollRfid(&uid)) return false;
+
+  char uidBuf[12];
+  uid.toCharArray(uidBuf, sizeof(uidBuf));
+
+  Cell cell = {0, 0};
+  if (!cellForUid(uidBuf, &cell)) {
+    Serial.print(F("[AVOID RFID] unknown UID="));
+    Serial.println(uid);
+    return false;
+  }
+
+  if (strcmp(uidBuf, lastAvoidanceUid) == 0 &&
+      millis() - lastAvoidanceRfidMs < kAvoidanceRfidNodeDebounceMs) {
+    return false;
+  }
+
+  strncpy(lastAvoidanceUid, uidBuf, sizeof(lastAvoidanceUid) - 1);
+  lastAvoidanceUid[sizeof(lastAvoidanceUid) - 1] = '\0';
+  lastAvoidanceRfidMs = millis();
+
+  currentCell = cell;
+  updateRouteProgressFromCell(cell);
+
+  if (cellOut) *cellOut = cell;
+  if (uidOut && uidOutSize > 0) {
+    strncpy(uidOut, uidBuf, uidOutSize - 1);
+    uidOut[uidOutSize - 1] = '\0';
+  }
+
+  Serial.print(F("[AVOID RFID] uid="));
+  Serial.print(uidBuf);
+  Serial.print(F(" cell="));
+  printCell(cell);
+  Serial.print(F(" routeIndex="));
+  Serial.println(routeIndex);
+  return true;
+}
+
+bool avoidanceMovementSafetyOk(const char *phase, uint32_t startedMs, bool checkFrontSafety) {
+  serviceBackground();
+  if (!waitWhilePausedOrReturnRequested()) {
+    stopMotors();
+    Serial.print(F("[AVOID] aborted phase="));
+    Serial.println(phase);
+    return false;
+  }
+
+  if (checkFrontSafety) {
+    const float frontMm = readSonarMm(kFrontTrigPin, kFrontEchoPin);
+    if (sonarReadingValid(frontMm) && frontMm <= kAvoidanceFrontSafetyStopMm) {
+      stopMotors();
+      Serial.print(F("[AVOID] front safety stop phase="));
+      Serial.print(phase);
+      Serial.print(F(" frontMm="));
+      Serial.println(frontMm, 1);
+      return false;
+    }
+  }
+
+  if (millis() - startedMs > kAvoidanceMovementTimeoutMs) {
+    stopMotors();
+    Serial.print(F("[AVOID] movement timeout phase="));
+    Serial.println(phase);
+    return false;
+  }
+
+  return true;
+}
+
+bool driveAvoidanceDistanceMm(float distanceMm, int speed, bool checkFrontSafety, const char *phase) {
+  const long targetCounts = distanceMmToCounts(distanceMm);
+  const int direction = distanceMm >= 0.0f ? 1 : -1;
+  resetEncoders();
+  const uint32_t startedMs = millis();
+
+  while (true) {
+    if (!avoidanceMovementSafetyOk(phase, startedMs, checkFrontSafety)) return false;
+
+    const long leftAbs = absLong(getLeftCount());
+    const long rightAbs = absLong(getRightCount());
+    const long averageAbs = (leftAbs + rightAbs) / 2;
+    if (averageAbs >= targetCounts) break;
+
+    const long diff = leftAbs - rightAbs;
+    int correction = static_cast<int>(diff * kStraightCorrectionKp);
+    correction = constrain(correction, -kMaxStraightCorrection, kMaxStraightCorrection);
+    const int base = abs(speed) * direction;
+    setTank(base - correction, base + correction);
+    delay(10);
+  }
+
+  stopMotors();
+  return true;
+}
+
+bool followLineToNextAvoidanceNode(const char *phase, Cell *nodeOut, char *uidOut, size_t uidOutSize) {
+  const uint32_t startedMs = millis();
+  while (true) {
+    if (!avoidanceMovementSafetyOk(phase, startedMs, true)) return false;
+
+    if (pollAvoidanceGridNode(nodeOut, uidOut, uidOutSize)) {
+      stopMotors();
+      return true;
+    }
+
+    lineFollowStep(kAvoidanceManoeuvreSpeed);
+    delay(10);
+  }
+}
+
+bool driveStraightToNextAvoidanceNode(const char *phase, Cell *nodeOut, char *uidOut, size_t uidOutSize) {
+  const uint32_t startedMs = millis();
+  while (true) {
+    if (!avoidanceMovementSafetyOk(phase, startedMs, true)) return false;
+
+    if (pollAvoidanceGridNode(nodeOut, uidOut, uidOutSize)) {
+      stopMotors();
+      return true;
+    }
+
+    setTank(kAvoidanceManoeuvreSpeed, kAvoidanceManoeuvreSpeed);
+    delay(10);
+  }
+}
+
+void printAvoidanceSideSample(const __FlashStringHelper *label, uint8_t count, float currentMm) {
+  Serial.print(label);
+  Serial.print(F(" count="));
+  Serial.print(count);
+  Serial.print(F(" sideMm="));
+  Serial.println(currentMm, 1);
+}
+
+bool followLineUntilObstacleSideCleared(
+    uint8_t *counter,
+    uint8_t maxCounter,
+    WallSide obstacleFacingSide,
+    float referenceObstacleSideMm,
+    const char *phase) {
+  const uint32_t startedMs = millis();
+
+  while (true) {
+    if (!avoidanceMovementSafetyOk(phase, startedMs, true)) return false;
+
+    Cell node = {0, 0};
+    char uid[12] = "";
+    if (pollAvoidanceGridNode(&node, uid, sizeof(uid))) {
+      (*counter)++;
+      stopMotors();
+
+      const float currentSideMm = readSideSonarMm(obstacleFacingSide, nullptr);
+      printAvoidanceSideSample(F("[NODE]"), *counter, currentSideMm);
+
+      if (obstacleSideCleared(currentSideMm, referenceObstacleSideMm)) {
+        return driveAvoidanceDistanceMm(
+            kAvoidanceRfidCenteringOffsetMm,
+            kAvoidanceManoeuvreSpeed,
+            true,
+            "center_on_clear_node");
+      }
+
+      if (!obstacleStillBeside(currentSideMm, referenceObstacleSideMm)) {
+        Serial.println(F("[SIDE] ambiguous side distance; continuing cautiously."));
+      }
+
+      if (*counter >= maxCounter) {
+        Serial.print(F("[AVOID] side clear not found phase="));
+        Serial.println(phase);
+        return false;
+      }
+    }
+
+    lineFollowStep(kAvoidanceManoeuvreSpeed);
+    delay(10);
+  }
+}
+
+bool returnToOriginalLineOffset(uint8_t gridSpacesAway) {
+  uint8_t returnGridSpaces = 0;
+  while (returnGridSpaces < gridSpacesAway) {
+    Cell node = {0, 0};
+    char uid[12] = "";
+    if (!driveStraightToNextAvoidanceNode("return_to_original_line", &node, uid, sizeof(uid))) {
+      return false;
+    }
+
+    returnGridSpaces++;
+    Serial.print(F("[RETURN] uid="));
+    Serial.print(uid);
+    Serial.print(F(" count="));
+    Serial.print(returnGridSpaces);
+    Serial.print(F("/"));
+    Serial.println(gridSpacesAway);
+  }
+
+  return driveAvoidanceDistanceMm(
+      kAvoidanceRfidCenteringOffsetMm,
+      kAvoidanceManoeuvreSpeed,
+      true,
+      "center_on_original_line");
+}
+
+bool followPostObstacleNodes() {
+  uint8_t postObstacleCount = 0;
+  uint32_t startedMs = millis();
+
+  while (postObstacleCount < kAvoidancePostObstacleNodeTarget) {
+    if (!avoidanceMovementSafetyOk("follow_line_after_obstacle", startedMs, true)) return false;
+
+    Cell node = {0, 0};
+    char uid[12] = "";
+    if (pollAvoidanceGridNode(&node, uid, sizeof(uid))) {
+      postObstacleCount++;
+      Serial.print(F("[POST] uid="));
+      Serial.print(uid);
+      Serial.print(F(" count="));
+      Serial.print(postObstacleCount);
+      Serial.print(F("/"));
+      Serial.println(kAvoidancePostObstacleNodeTarget);
+      handleRfidEvent(uid);
+      startedMs = millis();
+      if (postObstacleCount >= kAvoidancePostObstacleNodeTarget) break;
+    }
+
+    lineFollowStep(kAvoidanceManoeuvreSpeed);
+    delay(10);
+  }
+
+  stopMotors();
+  return true;
+}
+
+bool applyLineBasedObstacleAvoidance() {
+  Serial.println(F("[OBSTACLE] applying line-based avoidance strategy."));
+  initializeAvoidanceRfidDebounce();
+  resetLineControllerHistory();
+
+  WallSide swerveDirection = WallSide::Left;
+  WallSide obstacleFacingSide = WallSide::Right;
+  chooseSwerveDirection(&swerveDirection, &obstacleFacingSide);
+
+  Cell node = {0, 0};
+  char uid[12] = "";
+  if (!followLineToNextAvoidanceNode("find_alignment_tag", &node, uid, sizeof(uid))) {
+    return false;
+  }
+  if (!driveAvoidanceDistanceMm(
+          kAvoidanceRfidCenteringOffsetMm,
+          kAvoidanceManoeuvreSpeed,
+          true,
+          "center_before_swerve")) {
+    return false;
+  }
+
+  float headingOffsetFromOriginalDeg = 0.0f;
+  const float swerveSign = turnSignForSwerve(swerveDirection);
+  turnRelativeAndTrackHeading(90.0f * swerveSign, &headingOffsetFromOriginalDeg);
+
+  const float referenceObstacleSideMm = readSideSonarMm(obstacleFacingSide, nullptr);
+  Serial.print(F("[SIDE] referenceMm="));
+  Serial.println(referenceObstacleSideMm, 1);
+
+  uint8_t gridSpacesAway = 0;
+  if (!followLineToNextAvoidanceNode("move_sideways_first_node", &node, uid, sizeof(uid))) {
+    return false;
+  }
+  if (!driveAvoidanceDistanceMm(
+          kAvoidanceRfidCenteringOffsetMm,
+          kAvoidanceManoeuvreSpeed,
+          true,
+          "center_sideways_node")) {
+    return false;
+  }
+
+  gridSpacesAway++;
+  float currentObstacleSideMm = readSideSonarMm(obstacleFacingSide, nullptr);
+  printAvoidanceSideSample(F("[NODE] alignment"), gridSpacesAway, currentObstacleSideMm);
+
+  if (!obstacleSideCleared(currentObstacleSideMm, referenceObstacleSideMm)) {
+    if (!obstacleStillBeside(currentObstacleSideMm, referenceObstacleSideMm)) {
+      Serial.println(F("[SIDE] ambiguous side distance; continuing cautiously."));
+    }
+    if (gridSpacesAway >= kAvoidanceMaxSidewaysGridSpaces) {
+      Serial.println(F("[AVOID] side clear not found after first sideways node."));
+      return false;
+    }
+    if (!followLineUntilObstacleSideCleared(
+            &gridSpacesAway,
+            kAvoidanceMaxSidewaysGridSpaces,
+            obstacleFacingSide,
+            referenceObstacleSideMm,
+            "move_sideways_around_obstacle")) {
+      return false;
+    }
+  }
+
+  turnRelativeAndTrackHeading(-90.0f * swerveSign, &headingOffsetFromOriginalDeg);
+
+  uint8_t gridSpacesPassing = 0;
+  if (!followLineUntilObstacleSideCleared(
+          &gridSpacesPassing,
+          kAvoidanceMaxPassingGridSpaces,
+          obstacleFacingSide,
+          referenceObstacleSideMm,
+          "pass_obstacle")) {
+    return false;
+  }
+
+  turnRelativeAndTrackHeading(-90.0f * swerveSign, &headingOffsetFromOriginalDeg);
+
+  if (!returnToOriginalLineOffset(gridSpacesAway)) {
+    return false;
+  }
+
+  const float restoreTurnDeg = -headingOffsetFromOriginalDeg;
+  turnRelativeAndTrackHeading(restoreTurnDeg, &headingOffsetFromOriginalDeg);
+  resetLineControllerHistory();
+
+  if (!followPostObstacleNodes()) {
+    return false;
+  }
+
+  usingBfsPath = false;
+  if (missionMode == MissionMode::ReturnHome && !sameCell(currentCell, kFinishCell)) {
+    planBfsPath(currentCell, kFinishCell);
+  }
+
+  Serial.print(F("[OBSTACLE] avoidance complete at "));
+  printCell(currentCell);
+  Serial.print(F(" heading="));
+  Serial.println(headingName(heading));
+  return true;
+}
+
 bool reverseUntilAnyRfid(Cell *foundCell, char *foundUid, size_t foundUidSize) {
   Serial.println(F("[RECOVERY] reversing until any RFID is detected."));
   const uint32_t start = millis();
@@ -1555,13 +2013,13 @@ bool frontObstacleDetected() {
 }
 
 void handlePersistentFrontObstacle() {
-  const Cell blocked = stepCell(currentCell, heading);
-  if (validCell(blocked) && !sameCell(blocked, currentCell)) {
-    obstacleGrid[blocked.row][blocked.col] = true;
-    Serial.print(F("[OBSTACLE] marked blocked cell "));
-    printCell(blocked);
-    Serial.println();
+  markFrontCellBlocked();
+
+  if (applyLineBasedObstacleAvoidance()) {
+    return;
   }
+
+  Serial.println(F("[OBSTACLE] line-based avoidance failed; falling back to RFID reverse and BFS."));
 
   Cell recoveredCell = currentCell;
   char recoveredUid[12] = "";

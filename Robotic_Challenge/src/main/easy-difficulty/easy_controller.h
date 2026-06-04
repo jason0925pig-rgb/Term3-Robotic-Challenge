@@ -6,10 +6,37 @@
 #include "easy_navigation.h"
 #include "easy_planting.h"
 
-constexpr uint8_t kEasyEntryEndTags = 2;
-constexpr uint8_t kEasyRowEndTags = 8;
 constexpr uint32_t kEasyEndNoNewRfidTimeoutMs = 3500;
 constexpr uint32_t kEasyScriptSegmentTimeoutPerTagMs = 9000;
+constexpr uint32_t kEasyPostTurnRfidIgnoreMs = 1000;
+
+enum class EasyGridTurnDir : uint8_t {
+  Left,
+  Right
+};
+
+struct EasyGridRouteStep {
+  uint8_t rfidCount;
+  EasyGridTurnDir turnAfter;
+  bool requestDoorAfterTurn;
+};
+
+constexpr EasyGridRouteStep kEasyGridRoute[] = {
+    {2, EasyGridTurnDir::Left, false},
+    {3, EasyGridTurnDir::Left, false},
+    {1, EasyGridTurnDir::Left, false},
+    {2, EasyGridTurnDir::Right, false},
+    {1, EasyGridTurnDir::Right, false},
+    {2, EasyGridTurnDir::Left, false},
+    {1, EasyGridTurnDir::Left, false},
+    {3, EasyGridTurnDir::Right, false},
+    {1, EasyGridTurnDir::Right, false},
+    {3, EasyGridTurnDir::Left, false},
+    {1, EasyGridTurnDir::Left, false},
+    {3, EasyGridTurnDir::Right, false},
+    {1, EasyGridTurnDir::Left, true},
+};
+constexpr uint8_t kEasyGridRouteLength = sizeof(kEasyGridRoute) / sizeof(kEasyGridRoute[0]);
 
 static MissionState easyMissionState = MissionState::Init;
 static uint8_t easySeedsRemaining = kEasyInitialSeedCount;
@@ -17,6 +44,7 @@ static Cell easyCurrentCell = {};
 static CellStatus easyLatestCellStatus = {};
 static String easyCurrentUid;
 static String easyLastProcessedUid;
+static uint32_t easyLastGridTurnMs = 0;
 static bool easyCompleteAnnounced = false;
 static bool easyErrorAnnounced = false;
 
@@ -125,14 +153,35 @@ inline bool processEasyRfidUid(const String &uid, bool *plantedOut) {
   return true;
 }
 
+inline bool suppressEasyRfidAfterTurn() {
+  return easyLastGridTurnMs != 0 && millis() - easyLastGridTurnMs < kEasyPostTurnRfidIgnoreMs;
+}
+
+inline const __FlashStringHelper *easyGridTurnName(EasyGridTurnDir dir) {
+  return dir == EasyGridTurnDir::Left ? F("LEFT") : F("RIGHT");
+}
+
+inline bool turnEasyGrid(EasyGridTurnDir dir) {
+  Serial.print(F("[SCRIPT] turn "));
+  Serial.println(easyGridTurnName(dir));
+  stopMotors();
+  delay(120);
+
+  const float degrees = dir == EasyGridTurnDir::Left ? 90.0f : -90.0f;
+  const bool ok = turnDegreesEasy(degrees);
+  delay(120);
+  lineIntegral = 0.0f;
+  lastLineError = 0;
+  if (ok) easyLastGridTurnMs = millis();
+  return ok;
+}
+
 inline bool turnEasyLeft() {
-  Serial.println(F("[SCRIPT] turn left"));
-  return turnDegreesEasy(90.0f);
+  return turnEasyGrid(EasyGridTurnDir::Left);
 }
 
 inline bool turnEasyRight() {
-  Serial.println(F("[SCRIPT] turn right"));
-  return turnDegreesEasy(-90.0f);
+  return turnEasyGrid(EasyGridTurnDir::Right);
 }
 
 inline bool driveLineAndProcessTags(uint8_t targetTags, bool allowEndByNoNewRfid,
@@ -157,24 +206,26 @@ inline bool driveLineAndProcessTags(uint8_t targetTags, bool allowEndByNoNewRfid
   while (millis() - start < timeoutMs) {
     if (!easyMovementSafetyOk()) return false;
 
-    String uid;
-    if (pollEasyRfidDebounced(&uid)) {
-      if (uid == easyLastProcessedUid) {
-        applyLineFollowStep();
-        continue;
-      }
+    if (!suppressEasyRfidAfterTurn()) {
+      String uid;
+      if (pollEasyRfidDebounced(&uid)) {
+        if (uid == easyLastProcessedUid) {
+          applyLineFollowStep();
+          continue;
+        }
 
-      stopMotors();
-      ++tagsSeen;
+        stopMotors();
+        ++tagsSeen;
 
-      if (!centerOverDetectedEasyRfid()) return false;
-      if (!processEasyRfidUid(uid, nullptr)) return false;
-      lastNewTagMs = millis();
+        if (!centerOverDetectedEasyRfid()) return false;
+        if (!processEasyRfidUid(uid, nullptr)) return false;
+        lastNewTagMs = millis();
 
-      if (tagsSeen >= targetTags) {
-        Serial.print(F("[SCRIPT] segment complete tagsSeen="));
-        Serial.println(tagsSeen);
-        return true;
+        if (tagsSeen >= targetTags) {
+          Serial.print(F("[SCRIPT] segment complete tagsSeen="));
+          Serial.println(tagsSeen);
+          return true;
+        }
       }
     }
 
@@ -197,29 +248,42 @@ inline bool driveLineAndProcessTags(uint8_t targetTags, bool allowEndByNoNewRfid
 
 inline bool executeHardcodedEasyStrategy() {
   if (!turnEasyRight()) return false;
-  if (!driveLineAndProcessTags(kEasyEntryEndTags, true, F("until end (2)"))) return false;
-  if (!turnEasyLeft()) return false;
 
-  if (!driveLineAndProcessTags(1, false, F("1 forward"))) return false;
-  if (!turnEasyLeft()) return false;
-  if (!driveLineAndProcessTags(kEasyRowEndTags, true, F("8 until end"))) return false;
+  for (uint8_t i = 0; i < kEasyGridRouteLength; ++i) {
+    const EasyGridRouteStep step = kEasyGridRoute[i];
+    Serial.print(F("[SCRIPT] grid step="));
+    Serial.print(i + 1);
+    Serial.print(F("/"));
+    Serial.print(kEasyGridRouteLength);
+    Serial.print(F(" count="));
+    Serial.print(step.rfidCount);
+    Serial.print(F(" turn="));
+    Serial.println(easyGridTurnName(step.turnAfter));
 
-  if (!turnEasyRight()) return false;
-  if (!driveLineAndProcessTags(1, false, F("1 forward"))) return false;
-  if (!turnEasyRight()) return false;
-  if (!driveLineAndProcessTags(kEasyRowEndTags, true, F("8 until end"))) return false;
+    if (!driveLineAndProcessTags(step.rfidCount, false, F("grid step"))) return false;
+    if (!turnEasyGrid(step.turnAfter)) return false;
 
-  if (!turnEasyLeft()) return false;
-  if (!driveLineAndProcessTags(1, false, F("1 forward"))) return false;
-  if (!turnEasyLeft()) return false;
-  if (!driveLineAndProcessTags(kEasyRowEndTags, true, F("8 until end"))) return false;
+    if (step.requestDoorAfterTurn) {
+      Serial.println(F("[SCRIPT] final grid turn complete; requesting airlock B."));
+      const String uid = easyLastProcessedUid.length() > 0 ? easyLastProcessedUid : easyCurrentUid;
+      if (uid.length() == 0) {
+        Serial.println(F("[AIRLOCK] no grid RFID UID available for return airlock B request; starting return anyway."));
+      } else {
+        while (!sendEasyAirlockOpenRequest(uid.c_str(), 'B')) {
+          if (!easyMovementSafetyOk()) return false;
+          Serial.println(F("[AIRLOCK] return airlock B request not sent yet; retrying."));
+          const uint32_t waitStart = millis();
+          while (millis() - waitStart < kEasyAirlockRequestRetryMs) {
+            if (!easyMovementSafetyOk()) return false;
+            delay(20);
+          }
+        }
+        Serial.println(F("[AIRLOCK] return airlock B request sent."));
+      }
 
-  Serial.println(F("[SCRIPT] return sequence"));
-  if (!turnEasyLeft()) return false;
-  if (!driveLineAndProcessTags(3, false, F("3 forward"))) return false;
-  if (!turnEasyLeft()) return false;
-  if (!driveLineAndProcessTags(2, false, F("2 forward"))) return false;
-  if (!turnEasyRight()) return false;
+      if (!executeEasyReturnTunnelToBaseLine()) return false;
+    }
+  }
 
   stopMotors();
   return true;
@@ -232,6 +296,7 @@ inline void initializeEasyMissionController() {
   easyLatestCellStatus = {};
   easyCurrentUid = "";
   easyLastProcessedUid = "";
+  easyLastGridTurnMs = 0;
   easyCompleteAnnounced = false;
   easyErrorAnnounced = false;
 }
@@ -250,6 +315,7 @@ inline void runEasyMissionStep() {
       easySeedsRemaining = kEasyInitialSeedCount;
       easyCurrentUid = "";
       easyLastProcessedUid = "";
+      easyLastGridTurnMs = 0;
       initializeEasyBaseExitController();
       setEasyMissionState(MissionState::ExitBaseToField);
       break;

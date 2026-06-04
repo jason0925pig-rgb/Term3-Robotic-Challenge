@@ -20,6 +20,9 @@
 #include "easy_controller.h"
 
 constexpr uint32_t kEasyStartupWifiCheckMs = 5000;
+constexpr bool kEasyRequireWifiBeforeCalibration = true;
+constexpr uint32_t kEasyWifiConnectTimeoutMs = 0;
+constexpr uint32_t kEasyWifiConnectPrintIntervalMs = 1000;
 
 void setupEasyPins() {
   if (kUseKillPin) pinMode(kKillPin, INPUT_PULLUP);
@@ -47,8 +50,8 @@ void setupEasyPins() {
   pinMode(kLeftEncoderBPin, INPUT_PULLUP);
   pinMode(kRightEncoderAPin, INPUT_PULLUP);
   pinMode(kRightEncoderBPin, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(kLeftEncoderAPin), leftEncoderIsr, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(kRightEncoderAPin), rightEncoderIsr, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(kLeftEncoderAPin), leftEncoderIsr, RISING);
+  attachInterrupt(digitalPinToInterrupt(kRightEncoderAPin), rightEncoderIsr, RISING);
 }
 
 void printStartupCheckStatus(const __FlashStringHelper *label, bool ok) {
@@ -57,15 +60,51 @@ void printStartupCheckStatus(const __FlashStringHelper *label, bool ok) {
   Serial.println(ok ? F("OK") : F("CHECK"));
 }
 
+bool waitForEasyWifiBeforeCalibration() {
+  if (!kEasyRequireWifiBeforeCalibration) return true;
+
+  Serial.println(F("[CHECK] Waiting for MiniMessenger before IMU calibration and motion."));
+  const uint32_t start = millis();
+  uint32_t lastPrintMs = 0;
+
+  while (!easyMessenger.isConnected()) {
+    handleSerialCommands();
+    easyServerLoop();
+
+    if (killPressed() || serialStopped) {
+      stopMotors();
+      Serial.println(F("[CHECK] WiFi wait cancelled by safety stop."));
+      return false;
+    }
+
+    if (kEasyWifiConnectTimeoutMs > 0 && millis() - start >= kEasyWifiConnectTimeoutMs) {
+      serialStopped = true;
+      stopMotors();
+      Serial.println(F("[CHECK] MiniMessenger connection timeout before calibration."));
+      return false;
+    }
+
+    if (millis() - lastPrintMs >= kEasyWifiConnectPrintIntervalMs) {
+      lastPrintMs = millis();
+      Serial.print(F("[CHECK] waiting... board="));
+      Serial.print(kEasyBoardId);
+      Serial.print(F(" group="));
+      Serial.println(GROUP_ID);
+    }
+    delay(20);
+  }
+
+  easyServerLoop();
+  Serial.println(F("[CHECK] MiniMessenger connected; continuing startup."));
+  return true;
+}
+
 void printEasyStrategyStartupCheck() {
   Serial.println(F("[CHECK] Hard-coded line strategy"));
   Serial.println(F("  base exit: route A/right, request airlock A, wall-follow tunnel to field line"));
   Serial.println(F("  enter: find first RFID, center, turn right"));
-  Serial.println(F("  row 1: drive until field end (2), turn left"));
-  Serial.println(F("  row 2: drive 1, turn left, drive 8/end"));
-  Serial.println(F("  row 3: turn right, drive 1, turn right, drive 8/end"));
-  Serial.println(F("  row 4: turn left, drive 1, turn left, drive 8/end"));
-  Serial.println(F("  return: turn left, drive 3, turn left, drive 2, turn right"));
+  Serial.println(F("  grid route: 2L,3L,1L,2R,1R,2L,1L,3R,1R,3L,1L,3R,1L+B"));
+  Serial.println(F("  return: request airlock B, line to tunnel, wall-follow to base line"));
   Serial.println(F("  per tag: detect RFID, center forward, then poll/plant/turn"));
   Serial.println(F("  RFID UID drives fertility polling; server coordinates ignored for navigation"));
   Serial.print(F("  known RFID UID mappings="));
@@ -241,8 +280,13 @@ void setup() {
   initializeQtrCalibration();
   initializeMotoron();
   initializeEasyRfid();
-  initializeImu();
   initializeEasyServer();
+  const bool wifiReadyForCalibration = waitForEasyWifiBeforeCalibration();
+  if (wifiReadyForCalibration) {
+    initializeImu();
+  } else {
+    Serial.println(F("[CHECK] IMU calibration skipped because startup was stopped."));
+  }
   initializeEasyPlanting();
   initializeEasyMissionController();
   printEasyStartupChecks();

@@ -33,6 +33,7 @@ constexpr uint32_t kEasyWallTunnelTimeoutMs = 25000;
 constexpr uint32_t kEasyPostDoorLineTimeoutMs = 12000;
 constexpr uint8_t kEasyTunnelEntryNoLineFrames = 6;
 constexpr uint8_t kEasyWallExitLineStableFrames = 2;
+constexpr uint8_t kEasyReturnWallExitLineStableFrames = 1;
 constexpr int kEasyTunnelEntryConfirmSpeed = 260;
 constexpr float kEasyDoorClosedThresholdMm = 170.0f;
 constexpr float kEasyDoorOpenThresholdMm = 320.0f;
@@ -45,7 +46,7 @@ constexpr uint32_t kEasyStopOverAirlockTagMs = 800;
 constexpr uint32_t kEasyAirlockRequestRetryMs = 1000;
 constexpr uint8_t kEasyFirstTMinActiveSensors = 8;
 constexpr uint8_t kEasyFirstTStableFrames = 5;
-constexpr float kEasyFirstTMinTravelMm = 160.0f;
+constexpr float kEasyFirstTMinTravelMm = 80.0f;
 constexpr uint16_t kEasyFirstTEdgeStrongThreshold = 650;
 constexpr uint16_t kEasyFirstTMinTotalStrength = 5600;
 constexpr int kEasyFirstTMaxCenterError = 900;
@@ -64,6 +65,8 @@ static uint8_t easyBaseDoorClosedStableCount = 0;
 static uint8_t easyBaseDoorOpenStableCount = 0;
 static uint8_t easyBaseTunnelNoLineCount = 0;
 static uint8_t easyBaseWallExitLineStableCount = 0;
+static uint8_t easyBaseReturnTunnelNoLineCount = 0;
+static uint8_t easyBaseReturnWallExitLineStableCount = 0;
 static bool easyBasePostTurnHardIgnoreActive = false;
 static uint32_t easyBasePostTurnHardIgnoreStartMs = 0;
 static uint8_t easyBasePostTurnHardReleaseCount = 0;
@@ -573,6 +576,78 @@ inline bool wallFollowEasyTunnelToFieldLine() {
   }
 }
 
+inline bool followEasyReturnLineToTunnelEntry() {
+  easyBaseReturnTunnelNoLineCount = 0;
+  resetEasyBaseLineController();
+  const uint32_t start = millis();
+
+  while (true) {
+    if (!easyMovementSafetyOk()) return false;
+
+    if (millis() - start > kEasyLineToTunnelTimeoutMs) {
+      stopMotors();
+      Serial.println(F("[RETURN] line-to-tunnel timeout after B request; starting return wall follow."));
+      resetEasyBaseWallController();
+      return true;
+    }
+
+    const LineReading line = readLine();
+    if (!line.detected) {
+      if (easyBaseReturnTunnelNoLineCount < 255) easyBaseReturnTunnelNoLineCount++;
+      if (easyBaseReturnTunnelNoLineCount >= kEasyTunnelEntryNoLineFrames) {
+        stopMotors();
+        Serial.println(F("[RETURN] line disappeared for 6 frames; starting return wall follow."));
+        resetEasyBaseWallController();
+        return true;
+      }
+
+      setTank(kEasyTunnelEntryConfirmSpeed, kEasyTunnelEntryConfirmSpeed);
+      updateImu();
+      delay(kLineLoopDelayMs);
+      continue;
+    }
+
+    easyBaseReturnTunnelNoLineCount = 0;
+    applyEasyBaseLineCommand(line, F("[RETURN TO TUNNEL]"));
+  }
+}
+
+inline bool wallFollowEasyReturnTunnelToBaseLine() {
+  easyBaseReturnWallExitLineStableCount = 0;
+  resetEasyBaseWallController();
+
+  while (true) {
+    if (!easyMovementSafetyOk()) return false;
+
+    const LineReading line = readLine();
+    if (line.detected) {
+      if (easyBaseReturnWallExitLineStableCount < 255) easyBaseReturnWallExitLineStableCount++;
+      if (easyBaseReturnWallExitLineStableCount >= kEasyReturnWallExitLineStableFrames) {
+        stopMotors();
+        Serial.println(F("[RETURN] QTR line found; leaving wall following at base line."));
+        resetEasyBaseLineController();
+        return true;
+      }
+    } else {
+      easyBaseReturnWallExitLineStableCount = 0;
+    }
+
+    applyWallFollowStep(kEasyTunnelWallSide);
+  }
+}
+
+inline bool executeEasyReturnTunnelToBaseLine() {
+  Serial.println(F("[RETURN] following line to return tunnel."));
+  if (!followEasyReturnLineToTunnelEntry()) return false;
+
+  Serial.println(F("[RETURN] wall-following return tunnel."));
+  if (!wallFollowEasyReturnTunnelToBaseLine()) return false;
+
+  stopMotors();
+  Serial.println(F("[RETURN] base line reached."));
+  return true;
+}
+
 inline void initializeEasyBaseExitController() {
   easyBaseRouteTurnIndex = 0;
   easyBaseEventStableCount = 0;
@@ -580,6 +655,8 @@ inline void initializeEasyBaseExitController() {
   easyBaseDoorOpenStableCount = 0;
   easyBaseTunnelNoLineCount = 0;
   easyBaseWallExitLineStableCount = 0;
+  easyBaseReturnTunnelNoLineCount = 0;
+  easyBaseReturnWallExitLineStableCount = 0;
   easyBasePostTurnHardIgnoreActive = false;
   easyBasePostTurnHardReleaseCount = 0;
   easyBaseLastEventMs = 0;

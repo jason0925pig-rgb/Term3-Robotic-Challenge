@@ -35,6 +35,8 @@
 //   5. Start tunnel wall following using the initial IMU calibration.
 //   6. As soon as the QTR array sees the grid line again, abandon wall
 //      following and follow the line to the first grid RFID.
+//      If the far-door obstacle remains blocked after the wait window, run the
+//      line-based obstacle bypass before resuming the grid-line flow.
 //   7. At every grid RFID: drive 75 mm to center the hole, stop, query the
 //      server, plant only if fertile=true and planted=false, then continue.
 //   8. After the first grid RFID turn right, then execute the fixed RFID-count
@@ -77,8 +79,8 @@ constexpr uint8_t kRouteTurnCount = 4;  // Four committed route turns from start
 
 // Distance to roll forward after a line event before making a 90 degree turn.
 // Tune these for the sensor-to-wheel-axis geometry on your robot.
-constexpr float kFirstTAdvanceMm = 60.0f;  // Distance to drive after detecting the first T before turning.
-constexpr float kSharpTurnAdvanceMm = 60.0f;  // Distance to drive after later hard-turn events before turning.
+constexpr float kFirstTAdvanceMm = 52.0f;  // Distance to drive after detecting the first T before turning.
+constexpr float kSharpTurnAdvanceMm = 52.0f;  // Distance to drive after later hard-turn events before turning.
 constexpr int kRouteAdvanceSpeed = 300;  // Motor speed used for the short pre-turn advance.
 
 // After the first outside RFID is detected, drive this extra distance so the
@@ -94,6 +96,7 @@ constexpr float kDoorOpenThresholdMm = 320.0f;  // Front sonar distance at/above
 constexpr uint8_t kDoorStableFrames = 3;  // Consecutive sonar frames required before accepting open/closed.
 constexpr bool kTreatNoEchoAsOpen = true;  // No echo usually means the door is no longer directly in front.
 constexpr uint32_t kDoorPrintIntervalMs = 250;  // Minimum time between front-door sonar debug prints.
+constexpr uint32_t kExitDoorObstacleWaitMs = 8000;  // Wait this long for a blocked exit door before bypassing it.
 
 // Safety timeouts for long straight sections.
 constexpr uint32_t kLineToDoorTimeoutMs = 12000;  // Maximum line-follow time from base route to tunnel entry.
@@ -112,7 +115,7 @@ constexpr int kRfidAlignSpeed = 260;  // Encoder-drive speed for final RFID alig
 // server reports fertile=true and planted=false.
 constexpr uint8_t kWallExitLineStableFrames = 2;  // Consecutive line frames needed to leave wall following.
 constexpr uint8_t kReturnWallExitLineStableFrames = 1;  // Return trip: one QTR line frame immediately resumes line following.
-constexpr float kGridPlantCenterOffsetMm = 90.0f;  // Drive after each grid RFID before querying/planting.
+constexpr float kGridPlantCenterOffsetMm = 100.0f;  // Drive after each grid RFID before querying/planting.
 constexpr int kGridPlantOffsetSpeed = 360;  // Encoder-drive speed for the 75 mm RFID-to-hole offset.
 constexpr bool kPlantIfNoServerReply = false;  // true only for offline bench tests.
 constexpr uint8_t kMaxSeedsToPlant = 5;  // Keep following the route after this, but do not drop more seeds.
@@ -151,12 +154,14 @@ constexpr uint32_t kLineLoopDelayMs = 8;  // Delay at end of each line-following
 
 // Intersection confirmation. The first T uses near-all-black detection; later
 // events use expected left/right hard-turn evidence.
-constexpr uint8_t kFirstTMinActiveSensors = 8;  // Minimum active sensors to accept the first T/bifurcation.
-constexpr uint8_t kFirstTStableFrames = 5;  // Consecutive first-T frames required before committing the first turn.
+constexpr uint8_t kFirstTMinActiveSensors = 7;  // Minimum active sensors to accept the first T/bifurcation.
+constexpr uint8_t kFirstTStableFrames = 3;  // First-T evidence frames required before committing the first turn.
 constexpr float kFirstTMinTravelMm = 80.0f;  // Minimum travel from start before the first T can be accepted.
 constexpr uint16_t kFirstTEdgeStrongThreshold = 650;  // Strong-black threshold required on both outer edges for first T.
 constexpr uint16_t kFirstTMinTotalStrength = 5600;  // Minimum summed 9-sensor black strength for first-T confidence.
-constexpr int kFirstTMaxCenterError = 900;  // Maximum centered line error allowed when accepting the first T.
+constexpr uint8_t kFirstTMiddleMinActiveSensors = 4;  // Minimum active sensors from the middle five channels.
+constexpr uint32_t kFirstTEvidenceWindowMs = 180;  // Allow short QTR flickers while confirming the first T.
+constexpr int kFirstTConfirmSpeed = 220;  // Straight speed while first-T evidence is being confirmed.
 constexpr uint8_t kSharpTurnStableFrames = 1;  // Later expected hard turns commit immediately when detected.
 constexpr uint32_t kEventCooldownMs = 500;  // Ignore all route events briefly after a committed turn.
 constexpr int kReacquireTurnSpeed = 150;  // Slow spin speed used to find the line after a turn.
@@ -184,6 +189,20 @@ constexpr float kWallIntegralClamp = 80.0f;  // Wall-following integral accumula
 constexpr uint32_t kWallLoopDelayMs = 20;  // Delay at the end of each wall-following step.
 constexpr uint32_t kWallPrintIntervalMs = 180;  // Minimum time between wall-following debug prints.
 constexpr bool kStopIfNoWallEcho = false;  // true = stop if side sonar fails instead of using last valid reading.
+
+// Line-based obstacle avoidance copied from Obstacle_Avoidance_Test/line-based.
+constexpr float kObstacleAheadThresholdMm = kDoorClosedThresholdMm;  // Front sonar threshold for a persistent obstacle.
+constexpr float kObstacleFrontSafetyStopMm = 20.0f;  // Emergency front stop while moving around an obstacle.
+constexpr float kObstacleSameSideDistanceToleranceMm = 35.0f;  // Current side distance can vary this much from reference.
+constexpr float kObstacleClearedSideDistanceIncreaseMm = 90.0f;  // Side distance increase that means the obstacle is cleared.
+constexpr float kObstacleRfidCenteringForwardOffsetMm = 220.0f;  // Drive after RFID detection to center on a grid node.
+constexpr int kObstacleManoeuvreSpeed = 260;  // Slow controlled speed for off-line obstacle manoeuvre segments.
+constexpr uint32_t kObstacleMovementTimeoutMs = 12000;  // Per-state obstacle manoeuvre failsafe.
+constexpr uint32_t kObstacleRfidNodeDebounceMs = 900;  // Prevent double-counting one RFID node during bypass.
+constexpr uint8_t kObstaclePostNodeTarget = 3;  // Nodes to follow after returning to the original line.
+constexpr uint8_t kObstacleMaxSidewaysGridSpaces = 4;  // Failsafe while moving away from the blocked line.
+constexpr uint8_t kObstacleMaxPassingGridSpaces = 4;  // Failsafe while passing beside the obstacle.
+constexpr WallSide kObstacleFallbackSwerveDirection = WallSide::Left;  // Used when side sonars cannot choose.
 
 // QTR-HD-09RC line sensor.
 constexpr uint8_t kQtrCtrlOddPin = 2;  // QTR odd emitter control pin.
@@ -283,6 +302,17 @@ enum class MissionState {
   FollowLineToTunnelEntry,
   WallFollowTunnel,
   WaitExitDoorOpen,
+  ObstaclePrepareSwerve,
+  ObstacleFindAlignmentTag,
+  ObstacleDriveRfidCenterOffset,
+  ObstacleTurnAway,
+  ObstacleMoveSidewaysAroundObstacle,
+  ObstacleTurnParallelToOriginal,
+  ObstaclePassObstacle,
+  ObstacleTurnBackTowardLine,
+  ObstacleReturnToOriginalLineOffset,
+  ObstacleRestoreOriginalHeading,
+  ObstacleFollowLineAfterObstacle,
   SearchFirstRfid,
   AlignOverRfid,
   FollowLineToFirstGridRfid,
@@ -357,6 +387,15 @@ struct DoorReading {
   bool open = false;
 };
 
+struct SonarSnapshot {
+  float frontMm = -1.0f;
+  float leftMm = -1.0f;
+  float rightMm = -1.0f;
+  bool frontValid = false;
+  bool leftValid = false;
+  bool rightValid = false;
+};
+
 struct CellStatus {
   bool valid = false;
   bool fertile = false;
@@ -415,6 +454,7 @@ uint32_t lastKillChangeMs = 0;
 
 uint8_t routeTurnIndex = 0;
 uint8_t eventStableCount = 0;
+uint32_t lastFirstTEvidenceMs = 0;
 uint8_t doorClosedStableCount = 0;
 uint8_t doorOpenStableCount = 0;
 uint8_t wallExitLineStableCount = 0;
@@ -425,9 +465,24 @@ uint8_t easySegmentRfidCount = 0;
 uint8_t seedsPlanted = 0;
 int currentServoAngle = kServoMinAngle;
 
+MissionState obstacleResumeState = MissionState::FollowLineToFirstGridRfid;
+MissionState obstacleCenteringNextState = MissionState::ObstacleTurnAway;
+WallSide obstacleSwerveDirection = kObstacleFallbackSwerveDirection;
+WallSide obstacleFacingSide = WallSide::Right;
+float obstacleHeadingOffsetDeg = 0.0f;
+float obstacleReferenceSideMm = -1.0f;
+float obstacleCurrentSideMm = -1.0f;
+uint8_t obstacleGridSpacesAway = 0;
+uint8_t obstacleGridSpacesPassing = 0;
+uint8_t obstacleReturnGridSpaces = 0;
+uint8_t obstaclePostRfidCount = 0;
+bool obstacleCenteringCountsAsSidewaysStep = false;
+
 String lastUid;
 String lastGridUid;
+String lastObstacleNodeUid;
 uint32_t lastGridUidMs = 0;
+uint32_t lastObstacleNodeUidMs = 0;
 uint32_t lastGridTurnMs = 0;
 bool easyDoorRequestSent = false;
 bool waitingForCellStatus = false;
@@ -577,6 +632,17 @@ const __FlashStringHelper *stateName(MissionState state) {
     case MissionState::FollowLineToTunnelEntry: return F("FOLLOW_LINE_TO_TUNNEL_ENTRY");
     case MissionState::WallFollowTunnel: return F("WALL_FOLLOW_TUNNEL");
     case MissionState::WaitExitDoorOpen: return F("WAIT_EXIT_DOOR_OPEN");
+    case MissionState::ObstaclePrepareSwerve: return F("OBSTACLE_PREPARE_SWERVE");
+    case MissionState::ObstacleFindAlignmentTag: return F("OBSTACLE_FIND_ALIGNMENT_TAG");
+    case MissionState::ObstacleDriveRfidCenterOffset: return F("OBSTACLE_DRIVE_RFID_CENTER_OFFSET");
+    case MissionState::ObstacleTurnAway: return F("OBSTACLE_TURN_AWAY");
+    case MissionState::ObstacleMoveSidewaysAroundObstacle: return F("OBSTACLE_MOVE_SIDEWAYS_AROUND");
+    case MissionState::ObstacleTurnParallelToOriginal: return F("OBSTACLE_TURN_PARALLEL");
+    case MissionState::ObstaclePassObstacle: return F("OBSTACLE_PASS");
+    case MissionState::ObstacleTurnBackTowardLine: return F("OBSTACLE_TURN_BACK_TO_LINE");
+    case MissionState::ObstacleReturnToOriginalLineOffset: return F("OBSTACLE_RETURN_TO_LINE_OFFSET");
+    case MissionState::ObstacleRestoreOriginalHeading: return F("OBSTACLE_RESTORE_HEADING");
+    case MissionState::ObstacleFollowLineAfterObstacle: return F("OBSTACLE_FOLLOW_LINE_AFTER");
     case MissionState::SearchFirstRfid: return F("SEARCH_FIRST_RFID");
     case MissionState::AlignOverRfid: return F("ALIGN_OVER_RFID");
     case MissionState::FollowLineToFirstGridRfid: return F("FOLLOW_LINE_TO_FIRST_GRID_RFID");
@@ -751,6 +817,26 @@ void resetWallController() {
 void resetDoorCounters() {
   doorClosedStableCount = 0;
   doorOpenStableCount = 0;
+}
+
+/**
+ * Clear line-based obstacle-avoidance progress.
+ */
+void resetObstacleAvoidanceProgress() {
+  obstacleResumeState = MissionState::FollowLineToFirstGridRfid;
+  obstacleCenteringNextState = MissionState::ObstacleTurnAway;
+  obstacleSwerveDirection = kObstacleFallbackSwerveDirection;
+  obstacleFacingSide = WallSide::Right;
+  obstacleHeadingOffsetDeg = 0.0f;
+  obstacleReferenceSideMm = -1.0f;
+  obstacleCurrentSideMm = -1.0f;
+  obstacleGridSpacesAway = 0;
+  obstacleGridSpacesPassing = 0;
+  obstacleReturnGridSpaces = 0;
+  obstaclePostRfidCount = 0;
+  obstacleCenteringCountsAsSidewaysStep = false;
+  lastObstacleNodeUid = "";
+  lastObstacleNodeUidMs = 0;
 }
 
 /**
@@ -1054,6 +1140,8 @@ void printSettings() {
   Serial.print(sideName(wallSide));
   Serial.print(F(" alignMm="));
   Serial.print(rfidAlignOffsetMm, 1);
+  Serial.print(F(" obstacleWaitMs="));
+  Serial.print(kExitDoorObstacleWaitMs);
   Serial.print(F(" lastUid="));
   Serial.print(lastUid.length() > 0 ? lastUid : String("none"));
   Serial.print(F(" wifiConnected="));
@@ -1093,6 +1181,7 @@ void restartMission() {
   lastAirlockRequestAttemptMs = 0;
   routeTurnIndex = 0;
   eventStableCount = 0;
+  lastFirstTEvidenceMs = 0;
   tunnelEntryNoLineCount = 0;
   wallExitLineStableCount = 0;
   returnTunnelNoLineCount = 0;
@@ -1110,6 +1199,7 @@ void restartMission() {
   lastGridUidMs = 0;
   lastGridTurnMs = 0;
   lastEventMs = millis();
+  resetObstacleAvoidanceProgress();
   resetLineController();
   resetWallController();
 
@@ -1320,6 +1410,40 @@ DoorReading readDoor() {
   reading.open = (reading.valid && reading.frontMm >= kDoorOpenThresholdMm) ||
                  (!reading.valid && kTreatNoEchoAsOpen);
   return reading;
+}
+
+/**
+ * Read all three sonars with short gaps to reduce ultrasonic crosstalk.
+ *
+ * @return Front/left/right distances and validity flags.
+ */
+SonarSnapshot readSonars() {
+  SonarSnapshot snapshot;
+  snapshot.frontMm = readSonarMm(kFrontTrigPin, kFrontEchoPin);
+  snapshot.frontValid = isValidSonarDistance(snapshot.frontMm);
+  delay(8);
+
+  snapshot.leftMm = readSonarMm(kLeftTrigPin, kLeftEchoPin);
+  snapshot.leftValid = isValidSonarDistance(snapshot.leftMm);
+  delay(8);
+
+  snapshot.rightMm = readSonarMm(kRightTrigPin, kRightEchoPin);
+  snapshot.rightValid = isValidSonarDistance(snapshot.rightMm);
+  return snapshot;
+}
+
+/**
+ * Get the sonar distance for a logical side from a snapshot.
+ */
+float sonarDistanceForSide(WallSide side, const SonarSnapshot &snapshot) {
+  return side == WallSide::Left ? snapshot.leftMm : snapshot.rightMm;
+}
+
+/**
+ * Check whether a snapshot contains a valid sonar reading for a logical side.
+ */
+bool sonarValidForSide(WallSide side, const SonarSnapshot &snapshot) {
+  return side == WallSide::Left ? snapshot.leftValid : snapshot.rightValid;
 }
 
 /**
@@ -1739,6 +1863,39 @@ uint8_t activeSensorCount(uint16_t threshold) {
     if (qtrNorm[i] >= threshold) count++;
   }
   return count;
+}
+
+/**
+ * Count active QTR sensors within an inclusive sensor-index range.
+ *
+ * @param first First QTR index to check.
+ * @param last Last QTR index to check.
+ * @param threshold Normalized black-line threshold.
+ * @return Number of sensors above threshold in the requested range.
+ */
+uint8_t activeSensorRangeCount(uint8_t first, uint8_t last, uint16_t threshold) {
+  if (first > 8) first = 8;
+  if (last > 8) last = 8;
+  if (first > last) return 0;
+
+  uint8_t count = 0;
+  for (uint8_t i = first; i <= last; i++) {
+    if (qtrNorm[i] >= threshold) count++;
+  }
+  return count;
+}
+
+/**
+ * Sum normalized black strength across the full QTR array.
+ *
+ * @return Total normalized black strength across all 9 sensors.
+ */
+uint16_t qtrTotalStrength() {
+  uint16_t total = 0;
+  for (uint8_t i = 0; i < 9; i++) {
+    total += qtrNorm[i];
+  }
+  return total;
 }
 
 /**
@@ -2564,7 +2721,11 @@ float degreesForTurn(TurnDir dir) {
 }
 
 /**
- * Detect the first T/bifurcation using near-all-black QTR evidence.
+ * Detect the first T/bifurcation using near-all-black QTR topology.
+ *
+ * A wide black bar can produce a biased weighted line position when one side of
+ * the sensor array is darker than the other. For that reason this detector uses
+ * coverage across the array instead of rejecting on line.error.
  *
  * @param line Current line reading.
  * @return true when the first T pattern is present.
@@ -2574,7 +2735,6 @@ bool firstTDetected(const LineReading &line) {
   if (currentRouteSegmentTravelMm() < kFirstTMinTravelMm) return false;
   if (line.activeCount < kFirstTMinActiveSensors) return false;
   if (!centerHasLine()) return false;
-  if (abs(line.error) > kFirstTMaxCenterError) return false;
 
   const bool leftEdgeStrong =
       qtrNorm[0] >= kFirstTEdgeStrongThreshold || qtrNorm[1] >= kFirstTEdgeStrongThreshold;
@@ -2582,11 +2742,11 @@ bool firstTDetected(const LineReading &line) {
       qtrNorm[7] >= kFirstTEdgeStrongThreshold || qtrNorm[8] >= kFirstTEdgeStrongThreshold;
   if (!leftEdgeStrong || !rightEdgeStrong) return false;
 
-  uint16_t totalStrength = 0;
-  for (uint8_t i = 0; i < 9; i++) {
-    totalStrength += qtrNorm[i];
+  if (activeSensorRangeCount(2, 6, kLineThreshold) < kFirstTMiddleMinActiveSensors) {
+    return false;
   }
-  return totalStrength >= kFirstTMinTotalStrength;
+
+  return qtrTotalStrength() >= kFirstTMinTotalStrength;
 }
 
 /**
@@ -2622,7 +2782,26 @@ bool routeEventReady(const LineReading &line) {
 
   const TurnDir expected = routeTurnAt(routeTurnIndex);
   const bool firstRouteTurn = routeTurnIndex == 0;
-  const bool eventNow = firstRouteTurn ? firstTDetected(line) : expectedSharpTurnDetected(line, expected);
+  const uint32_t now = millis();
+
+  if (firstRouteTurn) {
+    if (firstTDetected(line)) {
+      if (lastFirstTEvidenceMs == 0 ||
+          now - lastFirstTEvidenceMs > kFirstTEvidenceWindowMs) {
+        eventStableCount = 0;
+      }
+      lastFirstTEvidenceMs = now;
+      if (eventStableCount < 255) eventStableCount++;
+    } else if (lastFirstTEvidenceMs == 0 ||
+               now - lastFirstTEvidenceMs > kFirstTEvidenceWindowMs) {
+      eventStableCount = 0;
+      lastFirstTEvidenceMs = 0;
+    }
+
+    return eventStableCount >= kFirstTStableFrames;
+  }
+
+  const bool eventNow = expectedSharpTurnDetected(line, expected);
 
   if (!eventNow) {
     eventStableCount = 0;
@@ -2630,8 +2809,17 @@ bool routeEventReady(const LineReading &line) {
   }
 
   if (eventStableCount < 255) eventStableCount++;
-  const uint8_t requiredFrames = firstRouteTurn ? kFirstTStableFrames : kSharpTurnStableFrames;
-  return eventStableCount >= requiredFrames;
+  return eventStableCount >= kSharpTurnStableFrames;
+}
+
+/**
+ * @return true while first-T evidence is being accumulated.
+ */
+bool firstTConfirmationActive() {
+  return routeTurnIndex == 0 &&
+         eventStableCount > 0 &&
+         lastFirstTEvidenceMs != 0 &&
+         millis() - lastFirstTEvidenceMs <= kFirstTEvidenceWindowMs;
 }
 
 /**
@@ -2704,6 +2892,7 @@ bool performRouteTurn() {
 
   routeTurnIndex++;
   eventStableCount = 0;
+  lastFirstTEvidenceMs = 0;
   lastEventMs = millis();
   beginPostTurnHardIgnore();
   return true;
@@ -3101,6 +3290,485 @@ void updateEasyAfterDoorForward() {
   delay(kLineLoopDelayMs);
 }
 
+// ---------------------------------------------------------------------------
+// Persistent obstacle bypass
+// ---------------------------------------------------------------------------
+
+/**
+ * Stop the obstacle bypass and leave the mission in STOPPED.
+ */
+void stopObstacleAvoidance(const __FlashStringHelper *reason) {
+  stopMotors();
+  serialStopped = true;
+  Serial.print(F("[OBSTACLE] stopped: "));
+  Serial.println(reason);
+  setState(MissionState::Stopped);
+}
+
+/**
+ * @return milliseconds elapsed in the current mission state.
+ */
+uint32_t currentStateElapsedMs() {
+  return millis() - stateStartMs;
+}
+
+/**
+ * Check generic safety conditions used by obstacle-manoeuvre states.
+ */
+bool obstacleMovementSafetyOk() {
+  if (serialStopped || handleStartStopButtonEvent()) {
+    stopMotors();
+    return false;
+  }
+
+  const float frontMm = readSonarMm(kFrontTrigPin, kFrontEchoPin);
+  if (isValidSonarDistance(frontMm) && frontMm <= kObstacleFrontSafetyStopMm) {
+    stopObstacleAvoidance(F("front_safety_stop"));
+    return false;
+  }
+
+  if (currentStateElapsedMs() > kObstacleMovementTimeoutMs) {
+    stopObstacleAvoidance(F("movement_timeout"));
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Poll an RFID grid node with debounce separate from planting-route RFID state.
+ */
+bool pollObstacleGridNode(String *uidOut) {
+  String uid;
+  if (!pollRfid(&uid, true)) return false;
+
+  if (uid == lastObstacleNodeUid &&
+      millis() - lastObstacleNodeUidMs < kObstacleRfidNodeDebounceMs) {
+    return false;
+  }
+
+  lastObstacleNodeUid = uid;
+  lastObstacleNodeUidMs = millis();
+  *uidOut = uid;
+  return true;
+}
+
+/**
+ * Choose the side with more measured space for the initial swerve.
+ */
+void chooseObstacleSwerveDirection(const SonarSnapshot &snapshot) {
+  if (snapshot.leftValid && snapshot.rightValid) {
+    obstacleSwerveDirection =
+        snapshot.leftMm > snapshot.rightMm ? WallSide::Left : WallSide::Right;
+  } else if (snapshot.leftValid) {
+    obstacleSwerveDirection = WallSide::Left;
+  } else if (snapshot.rightValid) {
+    obstacleSwerveDirection = WallSide::Right;
+  } else {
+    obstacleSwerveDirection = kObstacleFallbackSwerveDirection;
+  }
+
+  obstacleFacingSide =
+      obstacleSwerveDirection == WallSide::Left ? WallSide::Right : WallSide::Left;
+}
+
+/**
+ * @return +1 for a left swerve and -1 for a right swerve.
+ */
+float obstacleTurnSignForSwerve() {
+  return obstacleSwerveDirection == WallSide::Left ? 1.0f : -1.0f;
+}
+
+/**
+ * Check whether side sonar says the obstacle has been cleared.
+ */
+bool obstacleSideCleared(float currentMm) {
+  if (obstacleReferenceSideMm < 0.0f) return false;
+  if (currentMm < 0.0f) return true;
+  return currentMm > obstacleReferenceSideMm + kObstacleClearedSideDistanceIncreaseMm;
+}
+
+/**
+ * Check whether side sonar still approximately sees the obstacle beside us.
+ */
+bool obstacleStillBeside(float currentMm) {
+  if (currentMm < 0.0f) return false;
+  if (absFloat(currentMm - obstacleReferenceSideMm) <= kObstacleSameSideDistanceToleranceMm) {
+    return true;
+  }
+  return currentMm <= obstacleReferenceSideMm + kObstacleClearedSideDistanceIncreaseMm;
+}
+
+/**
+ * Start line-following until the next RFID node, then encoder-center on it.
+ */
+void beginObstacleFindAndCenterOnNextRfid(MissionState nextState, bool countsAsSidewaysStep) {
+  obstacleCenteringNextState = nextState;
+  obstacleCenteringCountsAsSidewaysStep = countsAsSidewaysStep;
+  resetLineController();
+  setState(MissionState::ObstacleFindAlignmentTag);
+}
+
+/**
+ * Start the encoder centering offset toward a later obstacle-bypass state.
+ */
+void beginObstacleEncoderCenteringToState(MissionState nextState) {
+  obstacleCenteringNextState = nextState;
+  obstacleCenteringCountsAsSidewaysStep = false;
+  resetEncoders();
+  setState(MissionState::ObstacleDriveRfidCenterOffset);
+}
+
+/**
+ * Apply one line-following step without the normal mission RFID handling.
+ */
+void applyObstacleLineFollowWithoutDelay(const __FlashStringHelper *label) {
+  const LineReading line = readLine();
+  applyLineCommand(line, label);
+  updateImu();
+}
+
+/**
+ * Handle the first RFID alignment search before or during a swerve.
+ */
+void handleObstacleAlignmentTagSearch() {
+  if (!obstacleMovementSafetyOk()) return;
+
+  String uid;
+  if (pollObstacleGridNode(&uid)) {
+    stopMotors();
+    resetEncoders();
+    Serial.print(F("[OBSTACLE ALIGN] uid="));
+    Serial.print(uid);
+    Serial.print(F(" offsetMm="));
+    Serial.print(kObstacleRfidCenteringForwardOffsetMm, 1);
+    Serial.print(F(" next="));
+    Serial.println(stateName(obstacleCenteringNextState));
+    setState(MissionState::ObstacleDriveRfidCenterOffset);
+    return;
+  }
+
+  applyObstacleLineFollowWithoutDelay(F("[OBSTACLE ALIGN]"));
+  delay(kLineLoopDelayMs);
+}
+
+/**
+ * Update current side-obstacle distance from a full sonar snapshot.
+ */
+void updateObstacleCurrentSideDistance() {
+  const SonarSnapshot snapshot = readSonars();
+  obstacleCurrentSideMm = sonarDistanceForSide(obstacleFacingSide, snapshot);
+  if (!sonarValidForSide(obstacleFacingSide, snapshot)) {
+    obstacleCurrentSideMm = -1.0f;
+  }
+}
+
+/**
+ * Handle the node reached after centering on a sideways step.
+ */
+void handleObstacleSidewaysStepAfterCentering() {
+  obstacleGridSpacesAway++;
+  updateObstacleCurrentSideDistance();
+
+  Serial.print(F("[OBSTACLE NODE] alignment count="));
+  Serial.print(obstacleGridSpacesAway);
+  Serial.print(F(" sideMm="));
+  Serial.println(obstacleCurrentSideMm, 1);
+
+  if (obstacleSideCleared(obstacleCurrentSideMm)) {
+    setState(MissionState::ObstacleTurnParallelToOriginal);
+    return;
+  }
+
+  if (!obstacleStillBeside(obstacleCurrentSideMm)) {
+    Serial.println(F("[OBSTACLE SIDE] ambiguous side distance; continuing cautiously."));
+  }
+
+  if (obstacleGridSpacesAway >= kObstacleMaxSidewaysGridSpaces) {
+    stopObstacleAvoidance(F("side_clear_not_found"));
+    return;
+  }
+
+  resetLineController();
+  setState(MissionState::ObstacleMoveSidewaysAroundObstacle);
+}
+
+/**
+ * Drive the fixed RFID-centering offset using encoder balancing.
+ */
+void handleObstacleRfidCenterOffsetDrive() {
+  if (!obstacleMovementSafetyOk()) return;
+
+  const long targetCounts = distanceMmToCounts(kObstacleRfidCenteringForwardOffsetMm);
+  const long leftAbs = absLong(getLeftCount());
+  const long rightAbs = absLong(getRightCount());
+  const long averageAbs = (leftAbs + rightAbs) / 2;
+
+  if (averageAbs >= targetCounts) {
+    stopMotors();
+    Serial.print(F("[OBSTACLE ALIGN] centered counts="));
+    Serial.print(averageAbs);
+    Serial.print(F("/"));
+    Serial.print(targetCounts);
+    Serial.print(F(" next="));
+    Serial.println(stateName(obstacleCenteringNextState));
+
+    const MissionState nextState = obstacleCenteringNextState;
+    const bool countsAsSidewaysStep = obstacleCenteringCountsAsSidewaysStep;
+    obstacleCenteringCountsAsSidewaysStep = false;
+
+    if (countsAsSidewaysStep) {
+      handleObstacleSidewaysStepAfterCentering();
+    } else {
+      setState(nextState);
+    }
+    return;
+  }
+
+  const long diff = leftAbs - rightAbs;
+  int correction = static_cast<int>(diff * kStraightCorrectionKp);
+  correction = constrain(correction, -kMaxStraightCorrection, kMaxStraightCorrection);
+  setTank(kObstacleManoeuvreSpeed - correction, kObstacleManoeuvreSpeed + correction);
+  updateImu();
+  delay(10);
+}
+
+/**
+ * Line-follow across or alongside the obstacle until a node indicates clearance.
+ */
+void handleObstacleRfidLineFollowMovement(
+    uint8_t *counter,
+    uint8_t maxCounter,
+    MissionState nextState) {
+  if (!obstacleMovementSafetyOk()) return;
+
+  applyObstacleLineFollowWithoutDelay(F("[OBSTACLE LINE]"));
+
+  String uid;
+  if (!pollObstacleGridNode(&uid)) {
+    delay(kLineLoopDelayMs);
+    return;
+  }
+
+  (*counter)++;
+  stopMotors();
+  updateObstacleCurrentSideDistance();
+
+  Serial.print(F("[OBSTACLE NODE] uid="));
+  Serial.print(uid);
+  Serial.print(F(" count="));
+  Serial.print(*counter);
+  Serial.print(F(" sideMm="));
+  Serial.println(obstacleCurrentSideMm, 1);
+
+  if (obstacleSideCleared(obstacleCurrentSideMm)) {
+    beginObstacleEncoderCenteringToState(nextState);
+    return;
+  }
+
+  if (!obstacleStillBeside(obstacleCurrentSideMm)) {
+    Serial.println(F("[OBSTACLE SIDE] ambiguous side distance; continuing cautiously."));
+  }
+
+  if (*counter >= maxCounter) {
+    stopObstacleAvoidance(F("side_clear_not_found"));
+  }
+}
+
+/**
+ * Drive back toward the original line by the number of grid spaces moved away.
+ */
+void handleObstacleReturnToLineOffset() {
+  if (!obstacleMovementSafetyOk()) return;
+
+  setTank(kObstacleManoeuvreSpeed, kObstacleManoeuvreSpeed);
+  updateImu();
+
+  String uid;
+  if (pollObstacleGridNode(&uid)) {
+    obstacleReturnGridSpaces++;
+    Serial.print(F("[OBSTACLE RETURN] uid="));
+    Serial.print(uid);
+    Serial.print(F(" count="));
+    Serial.print(obstacleReturnGridSpaces);
+    Serial.print(F("/"));
+    Serial.println(obstacleGridSpacesAway);
+
+    if (obstacleReturnGridSpaces >= obstacleGridSpacesAway) {
+      stopMotors();
+      beginObstacleEncoderCenteringToState(MissionState::ObstacleRestoreOriginalHeading);
+    }
+  }
+
+  delay(10);
+}
+
+/**
+ * Finish the bypass and return to the normal grid-entry state.
+ */
+void finishObstacleAvoidance() {
+  stopMotors();
+  if (lastObstacleNodeUid.length() > 0) {
+    lastGridUid = lastObstacleNodeUid;
+    lastGridUidMs = millis();
+  }
+
+  Serial.print(F("[OBSTACLE] bypass complete; resuming "));
+  Serial.println(stateName(obstacleResumeState));
+  setState(obstacleResumeState);
+}
+
+/**
+ * Follow the line after the obstacle before handing back to the main mission.
+ */
+void handleObstaclePostLineFollow() {
+  if (!obstacleMovementSafetyOk()) return;
+
+  applyObstacleLineFollowWithoutDelay(F("[OBSTACLE POST]"));
+
+  String uid;
+  if (pollObstacleGridNode(&uid)) {
+    obstaclePostRfidCount++;
+    Serial.print(F("[OBSTACLE POST] uid="));
+    Serial.print(uid);
+    Serial.print(F(" count="));
+    Serial.print(obstaclePostRfidCount);
+    Serial.print(F("/"));
+    Serial.println(kObstaclePostNodeTarget);
+
+    if (obstaclePostRfidCount >= kObstaclePostNodeTarget) {
+      finishObstacleAvoidance();
+      return;
+    }
+  }
+
+  delay(kLineLoopDelayMs);
+}
+
+/**
+ * Start the line-based persistent-obstacle manoeuvre.
+ */
+void beginPersistentObstacleAvoidance() {
+  stopMotors();
+  resetObstacleAvoidanceProgress();
+  obstacleResumeState = MissionState::FollowLineToFirstGridRfid;
+  Serial.print(F("[OBSTACLE] persistent front blockage for "));
+  Serial.print(kExitDoorObstacleWaitMs);
+  Serial.println(F(" ms; starting line-based bypass."));
+  setState(MissionState::ObstaclePrepareSwerve);
+}
+
+/**
+ * Run one state-machine step for the line-based obstacle bypass.
+ */
+void updateObstacleAvoidance() {
+  switch (missionState) {
+    case MissionState::ObstaclePrepareSwerve: {
+      stopMotors();
+      const SonarSnapshot snapshot = readSonars();
+      chooseObstacleSwerveDirection(snapshot);
+      Serial.print(F("[OBSTACLE SWERVE] direction="));
+      Serial.print(sideName(obstacleSwerveDirection));
+      Serial.print(F(" obstacleFacing="));
+      Serial.println(sideName(obstacleFacingSide));
+      beginObstacleFindAndCenterOnNextRfid(MissionState::ObstacleTurnAway, false);
+      break;
+    }
+
+    case MissionState::ObstacleFindAlignmentTag:
+      handleObstacleAlignmentTagSearch();
+      break;
+
+    case MissionState::ObstacleDriveRfidCenterOffset:
+      handleObstacleRfidCenterOffsetDrive();
+      break;
+
+    case MissionState::ObstacleTurnAway: {
+      const float turnDeg = 90.0f * obstacleTurnSignForSwerve();
+      if (!turnDegreesImu(turnDeg)) {
+        stopObstacleAvoidance(F("turn_away_failed"));
+        break;
+      }
+
+      obstacleHeadingOffsetDeg += turnDeg;
+      updateObstacleCurrentSideDistance();
+      obstacleReferenceSideMm = obstacleCurrentSideMm;
+      obstacleGridSpacesAway = 0;
+      beginObstacleFindAndCenterOnNextRfid(
+          MissionState::ObstacleMoveSidewaysAroundObstacle,
+          true);
+      break;
+    }
+
+    case MissionState::ObstacleMoveSidewaysAroundObstacle:
+      handleObstacleRfidLineFollowMovement(
+          &obstacleGridSpacesAway,
+          kObstacleMaxSidewaysGridSpaces,
+          MissionState::ObstacleTurnParallelToOriginal);
+      break;
+
+    case MissionState::ObstacleTurnParallelToOriginal: {
+      const float turnDeg = -90.0f * obstacleTurnSignForSwerve();
+      if (!turnDegreesImu(turnDeg)) {
+        stopObstacleAvoidance(F("turn_parallel_failed"));
+        break;
+      }
+
+      obstacleHeadingOffsetDeg += turnDeg;
+      obstacleGridSpacesPassing = 0;
+      resetLineController();
+      setState(MissionState::ObstaclePassObstacle);
+      break;
+    }
+
+    case MissionState::ObstaclePassObstacle:
+      handleObstacleRfidLineFollowMovement(
+          &obstacleGridSpacesPassing,
+          kObstacleMaxPassingGridSpaces,
+          MissionState::ObstacleTurnBackTowardLine);
+      break;
+
+    case MissionState::ObstacleTurnBackTowardLine: {
+      const float turnDeg = -90.0f * obstacleTurnSignForSwerve();
+      if (!turnDegreesImu(turnDeg)) {
+        stopObstacleAvoidance(F("turn_back_to_line_failed"));
+        break;
+      }
+
+      obstacleHeadingOffsetDeg += turnDeg;
+      obstacleReturnGridSpaces = 0;
+      setState(MissionState::ObstacleReturnToOriginalLineOffset);
+      break;
+    }
+
+    case MissionState::ObstacleReturnToOriginalLineOffset:
+      handleObstacleReturnToLineOffset();
+      break;
+
+    case MissionState::ObstacleRestoreOriginalHeading: {
+      const float restoreTurnDeg = -obstacleHeadingOffsetDeg;
+      if (absFloat(restoreTurnDeg) > kTurnToleranceDeg &&
+          !turnDegreesImu(restoreTurnDeg)) {
+        stopObstacleAvoidance(F("restore_heading_failed"));
+        break;
+      }
+
+      obstacleHeadingOffsetDeg = 0.0f;
+      obstaclePostRfidCount = 0;
+      resetLineController();
+      setState(MissionState::ObstacleFollowLineAfterObstacle);
+      break;
+    }
+
+    case MissionState::ObstacleFollowLineAfterObstacle:
+      handleObstaclePostLineFollow();
+      break;
+
+    default:
+      break;
+  }
+}
+
 /**
  * After requesting return airlock B, follow the line toward the return tunnel.
  *
@@ -3198,6 +3866,13 @@ void updateFollowBaseRoute() {
       return;
     }
   } else {
+    if (firstTConfirmationActive()) {
+      setTank(kFirstTConfirmSpeed, kFirstTConfirmSpeed);
+      updateImu();
+      delay(kLineLoopDelayMs);
+      return;
+    }
+
     const LineReading followLine = softenedPostTurnLine(line);
     applyLineCommand(followLine, F("[BASE]"));
     updatePostTurnHardIgnore(line);
@@ -3290,7 +3965,8 @@ void updateWallFollowTunnel() {
 }
 
 /**
- * Stop at the far tunnel door until it opens.
+ * Stop at the far tunnel door until it opens. If the blockage persists beyond
+ * the configured wait time, start the line-based obstacle bypass.
  */
 void updateWaitExitDoorOpen() {
   stopMotors();
@@ -3301,7 +3977,16 @@ void updateWaitExitDoorOpen() {
   if (opened) {
     Serial.println(F("[EXIT DOOR] open; following line to first grid RFID when available."));
     setState(MissionState::FollowLineToFirstGridRfid);
+    return;
   }
+
+  if (currentStateElapsedMs() >= kExitDoorObstacleWaitMs &&
+      door.valid &&
+      door.frontMm <= kObstacleAheadThresholdMm) {
+    beginPersistentObstacleAvoidance();
+    return;
+  }
+
   delay(20);
 }
 
@@ -3367,6 +4052,20 @@ void updateMission() {
 
     case MissionState::WaitExitDoorOpen:
       updateWaitExitDoorOpen();
+      break;
+
+    case MissionState::ObstaclePrepareSwerve:
+    case MissionState::ObstacleFindAlignmentTag:
+    case MissionState::ObstacleDriveRfidCenterOffset:
+    case MissionState::ObstacleTurnAway:
+    case MissionState::ObstacleMoveSidewaysAroundObstacle:
+    case MissionState::ObstacleTurnParallelToOriginal:
+    case MissionState::ObstaclePassObstacle:
+    case MissionState::ObstacleTurnBackTowardLine:
+    case MissionState::ObstacleReturnToOriginalLineOffset:
+    case MissionState::ObstacleRestoreOriginalHeading:
+    case MissionState::ObstacleFollowLineAfterObstacle:
+      updateObstacleAvoidance();
       break;
 
     case MissionState::SearchFirstRfid:

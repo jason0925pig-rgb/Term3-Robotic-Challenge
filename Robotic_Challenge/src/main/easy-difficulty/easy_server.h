@@ -8,8 +8,8 @@
 #include "../secrets.h"
 #include "easy_route.h"
 
-constexpr const char *kEasyBoardId = "Yu7GT";
-constexpr uint32_t kEasyRegisterIntervalMs = 8000;
+constexpr const char *kEasyBoardId = "YU7GT";
+constexpr uint32_t kEasyRegisterIntervalMs = 5000;
 constexpr uint32_t kEasyServerReplyTimeoutMs = 900;
 constexpr uint32_t kEasyWifiStatusPrintMs = 2500;
 
@@ -145,8 +145,8 @@ inline bool queryServerForCellStatus(const char *uid, CellStatus *statusOut) {
   }
 
   char msg[140];
-  snprintf(msg, sizeof(msg), "type=isFertile team_id=%s board_id=%s tag_id=%s",
-           GROUP_ID, kEasyBoardId, uid);
+  snprintf(msg, sizeof(msg), "type=isFertile tag_id=%s board_id=%s",
+           GROUP_ID, uid, kEasyBoardId);
 
   strncpy(easyPendingUid, uid, sizeof(easyPendingUid) - 1);
   easyPendingUid[sizeof(easyPendingUid) - 1] = '\0';
