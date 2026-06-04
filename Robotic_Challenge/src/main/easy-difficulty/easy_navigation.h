@@ -225,6 +225,8 @@ inline bool searchLineUntilAnyEasyRfid(String *uidOut) {
   }
 }
 
+// Move toward the target cell using line following when RFID navigation is expected.
+// If the target tag is not seen in time, the caller can fall back to encoder distance.
 inline EasyMoveResult moveLineFollowUntilRfid(Cell targetCell, const String &currentUid) {
   EasyMoveResult result;
   const uint32_t start = millis();

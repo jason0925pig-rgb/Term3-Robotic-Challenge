@@ -9,7 +9,6 @@
 #include "constants.h"
 #include "globals.h"
 #include "types.h"
-// #include "motor_utils.h"
 
 bool initializeImu() {
   Serial.print(F("[IMU] starting ICM20948 at 0x"));

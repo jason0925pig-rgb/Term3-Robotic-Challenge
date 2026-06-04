@@ -21,6 +21,9 @@ struct EasyGridRouteStep {
   bool requestDoorAfterTurn;
 };
 
+// Hardcoded field script after entering the planting grid. Each step drives until the given
+// number of new RFID tags has been processed, then turns in the specified direction.
+// The final step requests the return airlock after completing its turn.
 constexpr EasyGridRouteStep kEasyGridRoute[] = {
     {2, EasyGridTurnDir::Left, false},
     {3, EasyGridTurnDir::Left, false},
@@ -184,6 +187,9 @@ inline bool turnEasyRight() {
   return turnEasyGrid(EasyGridTurnDir::Right);
 }
 
+// Follow the line through one scripted segment, processing each new RFID tag once.
+// Duplicate reads from the same tag are ignored, and optional no-new-tag timeout is used
+// to infer the end of the field when the final segment has no fixed tag count.
 inline bool driveLineAndProcessTags(uint8_t targetTags, bool allowEndByNoNewRfid,
                                     const __FlashStringHelper *label) {
   Serial.print(F("[SCRIPT] drive "));

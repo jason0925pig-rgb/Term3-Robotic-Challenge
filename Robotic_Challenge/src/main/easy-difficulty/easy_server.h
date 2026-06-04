@@ -29,14 +29,10 @@ inline bool easyMotionAllowedByWifi() {
 inline void setEasyWifiStopped(const __FlashStringHelper *reason) {
   easyWifiMotionAllowed = false;
   stopMotors();
-  // Serial.print(F("[WIFI SAFETY] stopped: "));
-  // Serial.println(reason);
 }
 
 inline void setEasyWifiRunning(const __FlashStringHelper *reason) {
   easyWifiMotionAllowed = true;
-  // Serial.print(F("[WIFI SAFETY] running: "));
-  // Serial.println(reason);
 }
 
 inline void parseEasyCellStatusReply(const char *msg) {
@@ -68,11 +64,6 @@ inline void onEasyWifiMessage(const MessageMetadata& metadata, const uint8_t* pa
   memcpy(msg, payload, copyLen);
   msg[copyLen] = '\0';
 
-  // Serial.print(F("[WIFI RX] from "));
-  // Serial.print(metadata.fromBoardId);
-  // Serial.print(F(": "));
-  // Serial.println(msg);
-
   parseEasyCellStatusReply(msg);
 
   if (strstr(msg, "type=heartbeat") && strstr(msg, "enable=0")) {
@@ -101,13 +92,6 @@ inline void initializeEasyServer() {
   easyMessengerStarted = true;
   easyLastRegisterMs = 0;
   easyMessenger.begin(WIFI_SSID, WIFI_PASSWORD, BROKER_HOST, BROKER_PORT, GROUP_ID, kEasyBoardId);
-
-  // Serial.print(F("[WIFI] begin group="));
-  // Serial.print(GROUP_ID);
-  // Serial.print(F(" board="));
-  // Serial.print(kEasyBoardId);
-  // Serial.print(F(" connected="));
-  // Serial.println(easyMessenger.isConnected() ? F("YES") : F("NO"));
 }
 
 inline void easyServerLoop() {
@@ -121,17 +105,10 @@ inline void easyServerLoop() {
     char reg[128];
     snprintf(reg, sizeof(reg), "type=register team_id=%s board_id=%s", GROUP_ID, kEasyBoardId);
     const bool ok = easyMessenger.sendToBoard("server", reg);
-    // Serial.print(F("[WIFI] register "));
-    // Serial.print(ok ? F("sent: ") : F("failed: "));
-    // Serial.println(reg);
   }
 
   if (millis() - easyLastWifiStatusPrintMs >= kEasyWifiStatusPrintMs) {
     easyLastWifiStatusPrintMs = millis();
-    // Serial.print(F("[WIFI] connected="));
-    // Serial.print(easyMessenger.isConnected() ? F("YES") : F("NO"));
-    // Serial.print(F(" motionAllowed="));
-    // Serial.println(easyWifiMotionAllowed ? F("YES") : F("NO"));
   }
 }
 

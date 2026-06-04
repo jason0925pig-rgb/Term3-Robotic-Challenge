@@ -5,9 +5,7 @@
 
 #include "easy_types.h"
 
-// Server coordinates use numeric x/y, not letter/number labels:
-//   original C9 -> x=9, y=3
-//   original D9 -> x=9, y=4
+// Server cells are stored as numeric x/y coordinates
 constexpr Cell kEasyStartCell = {9, 3};
 constexpr Cell kEasyFinishCell = {1, 9};
 constexpr Direction kEasyInitialHeading = Direction::West;

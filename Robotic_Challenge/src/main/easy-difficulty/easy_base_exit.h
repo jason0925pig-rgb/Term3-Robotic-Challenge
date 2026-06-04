@@ -21,6 +21,8 @@ struct EasyDoorReading {
   bool open = false;
 };
 
+// Base-exit route tuning. These constants describe the selected base route, tunnel wall side,
+// line-event thresholds, door-distance thresholds, and retry timing for the airlock request.
 constexpr EasyBaseRouteChoice kEasyBaseRouteChoice = EasyBaseRouteChoice::BaseA_Bottom;
 constexpr WallSide kEasyTunnelWallSide = WallSide::Left;
 constexpr uint8_t kEasyBaseRouteTurnCount = 4;
@@ -130,6 +132,8 @@ inline float easyBaseCurrentRouteSegmentTravelMm() {
   return averageCounts / (kEncoderCountsPerMm * kDistanceCalibration);
 }
 
+// After a 90-degree base-route turn, the QTR array can briefly see the junction as a hard turn.
+// Suppress hard-left/right behavior until the center line is stable again or the timeout expires.
 inline void beginEasyBasePostTurnHardIgnore() {
   easyBasePostTurnHardIgnoreActive = true;
   easyBasePostTurnHardIgnoreStartMs = millis();
@@ -304,6 +308,8 @@ inline void printEasyDoorStatus(const __FlashStringHelper *label, const EasyDoor
   Serial.println(easyBaseDoorOpenStableCount);
 }
 
+// Detect base-route events from QTR patterns. The first T-junction uses wide-line evidence
+// across the array; later sharp turns are detected from the expected outer sensor side.
 inline bool easyFirstTDetected(const LineReading &line) {
   if (!line.detected) return false;
   if (easyBaseCurrentRouteSegmentTravelMm() < kEasyFirstTMinTravelMm) return false;

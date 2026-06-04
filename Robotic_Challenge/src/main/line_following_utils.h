@@ -81,6 +81,8 @@ bool centerHasLine() {
   return qtrNorm[3] >= kLineThreshold || qtrNorm[4] >= kLineThreshold || qtrNorm[5] >= kLineThreshold;
 }
 
+// Convert normalized QTR readings into a weighted line position. Strong side readings switch
+// the controller into hard-turn recovery, while centered readings use normal PID following.
 int computeLinePosition(bool *detectedOut) {
   normalizeQtrValues();
 

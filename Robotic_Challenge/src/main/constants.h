@@ -2,8 +2,6 @@
 
 #include <Arduino.h>
 
-// Tunable constants for Obstacle_Avoidance_Primitives.
-
 constexpr uint32_t kSerialBaud = 115200;
 
 // Motoron and motors.
